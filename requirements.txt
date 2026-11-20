@@ -1,0 +1,45 @@
+# ============================================
+# AI Video Clipper - Requirements
+# ============================================
+
+# --- Video Download & Processing ---
+yt-dlp>=2024.1.0
+ffmpeg-python>=0.2.0
+
+# --- Scene Detection ---
+scenedetect[opencv]>=0.6.2
+
+# --- Speech-to-Text (Whisper) ---
+openai-whisper>=20231117
+
+# --- Audio Analysis ---
+librosa>=0.10.1
+soundfile>=0.12.1
+
+# --- Computer Vision ---
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+
+# --- CLIP (Visual Scoring) ---
+open-clip-torch>=2.24.0
+
+# --- NLP / Transformers ---
+transformers>=4.36.0
+torch>=2.1.0
+sentencepiece>=0.1.99
+nltk>=3.8.1
+
+# --- Web UI (Optional) ---
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+jinja2>=3.1.2
+
+# --- Utilities ---
+numpy>=1.24.0
+pillow>=10.0.0
+tqdm>=4.66.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+rich>=13.7.0
+click>=8.1.7

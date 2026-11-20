@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#070913">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>StreamGrabber AI — Multi-Platform Live Streams & 9:16 Shorts Generator</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="blob-bg blob-1"></div>
+    <div class="blob-bg blob-2"></div>
+
+    <!-- Mobile Toast Notification -->
+    <div id="mobileToast" class="mobile-toast"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-wrapper">
+                <span class="logo-icon">⚡</span>
+                <h1 class="logo-text">StreamGrabber <span>AI</span></h1>
+            </div>
+            <p class="tagline">YouTube, Twitch, Kick & Social Media Streams se <strong>AI 9:16 Viral Shorts</strong> banayein</p>
+            <div class="badges-row">
+                <span class="badge ai-badge">🤖 Gemini AI Hooks</span>
+                <span class="badge vertical-badge">📱 9:16 Shorts (1080p/720p)</span>
+                <span class="badge overlay-pill-badge">🎮 GTA VI & @Creator Overlay</span>
+                <span class="badge live-badge"><span class="dot pulse"></span> Live Stream Support</span>
+                <button type="button" id="shareAppBtn" class="badge public-badge" title="Share with friends or copy link">
+                    <span id="shareBtnIcon">📲</span> <span id="shareBtnText">Share Public Link</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Card: Input Section -->
+        <main class="main-card glass-panel">
+            <form id="urlForm" class="url-form">
+                <div class="input-card-box">
+                    <div class="input-main-row">
+                        <span class="input-icon">🔗</span>
+                        <input 
+                            type="url" 
+                            id="videoUrl" 
+                            placeholder="Paste YouTube, Twitch, Kick, or Social Media link..." 
+                            required
+                            autocomplete="off"
+                            inputmode="url"
+                        >
+                        <button type="button" id="pasteBtn" class="btn-paste" title="Paste from clipboard">📋 Paste</button>
+                    </div>
+                    <button type="submit" id="fetchBtn" class="btn-primary">
+                        <span class="btn-text">⚡ Fetch Stream</span>
+                        <span class="spinner" id="fetchSpinner"></span>
+                    </button>
+                </div>
+            </form>
+
+            <!-- Video Preview Card (Hidden initially) -->
+            <div id="previewCard" class="preview-card" style="display: none;">
+                <div class="preview-layout">
+                    <div class="thumbnail-wrapper">
+                        <img id="videoThumb" src="" alt="Thumbnail">
+                        <span id="videoDurationBadge" class="duration-badge">00:00</span>
+                    </div>
+
+                    <div class="video-details">
+                        <h2 id="videoTitle" class="video-title">Title Here</h2>
+                        <p id="videoChannel" class="video-channel">Channel Name</p>
+
+                        <!-- Mode Switch Tabs -->
+                        <div class="mode-tabs">
+                            <button type="button" class="tab-btn active" id="tabAiShorts">
+                                ⚡ AI 9:16 Shorts Generator
+                            </button>
+                            <button type="button" class="tab-btn" id="tabFullDownload">
+                                📥 Full Video Download
+                            </button>
+                        </div>
+
+                        <!-- 1. AI 9:16 SHORTS MODE (Active by default) -->
+                        <div id="aiModeSection" class="mode-content active">
+                            <div class="ai-controls-grid">
+                                <div class="control-box">
+                                    <label>Short Quality (Resolution):</label>
+                                    <select id="aiShortQuality" class="custom-select">
+                                        <option value="1080p" selected>1080p Full HD (1080x1920)</option>
+                                        <option value="720p">720p HD (720x1280)</option>
+                                    </select>
+                                </div>
+                                <div class="control-box">
+                                    <label>Clip Framing (Character & Views):</label>
+                                    <select id="aiFrameStyle" class="custom-select">
+                                        <option value="blur_bg" selected>🌟 Full View + Ambient Blur (Character & Sides 100% visible)</option>
+                                        <option value="fill_crop">🎯 Action Center Fill (Zoomed)</option>
+                                    </select>
+                                </div>
+                                <div class="control-box">
+                                    <label>Kitne Clips Chahiye:</label>
+                                    <select id="aiNumClips" class="custom-select">
+                                        <option value="3" selected>3 Best Highlights (Fastest)</option>
+                                        <option value="5">5 Best Highlights</option>
+                                        <option value="8">8 Best Highlights</option>
+                                    </select>
+                                </div>
+                                <div class="control-box">
+                                    <label>Clip Duration:</label>
+                                    <select id="aiClipDuration" class="custom-select">
+                                        <option value="15">15 Sec (Quick Short)</option>
+                                        <option value="30" selected>30 Sec (Recommended)</option>
+                                        <option value="45">45 Sec</option>
+                                        <option value="60">60 Sec (Full 1 Min)</option>
+                                    </select>
+                                </div>
+                                <div class="control-box">
+                                    <label>Hook Style:</label>
+                                    <select id="aiHookStyle" class="custom-select">
+                                        <option value="gaming" selected>Gaming Excitement 🔥</option>
+                                        <option value="dramatic">Dramatic & Suspense 😱</option>
+                                        <option value="highlight">Classic Highlight ⚡</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Overlay Settings Panel -->
+                            <div class="overlay-settings-panel">
+                                <div class="overlay-toggle-row">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="aiEnableOverlay" checked>
+                                        <span class="switch-slider"></span>
+                                    </label>
+                                    <span class="toggle-label-text">
+                                        🎮 <strong>GTA VI & @Creator Overlay</strong> Add Karein
+                                        <span class="toggle-sub">Clip par GTA VI logo badge aur creator ka bold @username aayega</span>
+                                    </span>
+                                </div>
+                                <div id="overlayDetailsRow" class="overlay-inputs-grid">
+                                    <div class="control-box">
+                                        <label>Badge Logo / Text:</label>
+                                        <input type="text" id="aiOverlayBadge" class="custom-input" value="GTA VI" placeholder="GTA VI">
+                                    </div>
+                                    <div class="control-box">
+                                        <label>Creator Tag (@Username):</label>
+                                        <input type="text" id="aiCreatorTag" class="custom-input" placeholder="Auto (@ChannelName)">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button type="button" id="startAiBtn" class="btn-ai-action">
+                                ⚡ Generate AI 9:16 Shorts Now
+                            </button>
+                            <p class="ai-hint">AI high-action moments scan karke branded 9:16 vertical shorts generate karega.</p>
+                        </div>
+
+                        <!-- 2. FULL DOWNLOAD MODE -->
+                        <div id="fullModeSection" class="mode-content" style="display: none;">
+                            <div class="options-wrapper">
+                                <label class="section-label">Quality Select Karein:</label>
+                                <div class="quality-grid">
+                                    <label class="quality-option">
+                                        <input type="radio" name="quality" value="1080p">
+                                        <span class="opt-name">1080p</span>
+                                        <span class="opt-desc">Full HD</span>
+                                    </label>
+                                    <label class="quality-option active">
+                                        <input type="radio" name="quality" value="720p" checked>
+                                        <span class="opt-name">720p</span>
+                                        <span class="opt-desc">HD (Recommended)</span>
+                                    </label>
+                                    <label class="quality-option">
+                                        <input type="radio" name="quality" value="480p">
+                                        <span class="opt-name">480p</span>
+                                        <span class="opt-desc">Standard</span>
+                                    </label>
+                                    <label class="quality-option">
+                                        <input type="radio" name="quality" value="360p">
+                                        <span class="opt-name">360p</span>
+                                        <span class="opt-desc">Fast Download</span>
+                                    </label>
+                                    <label class="quality-option">
+                                        <input type="radio" name="quality" value="audio_only">
+                                        <span class="opt-name">MP3 Audio</span>
+                                        <span class="opt-desc">Sirf Awaaz</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <button type="button" id="startDownloadBtn" class="btn-download-action">
+                                📥 Full Video Download Start Karein
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress Box (Active during download or AI) -->
+            <div id="progressCard" class="progress-card" style="display: none;">
+                <div class="progress-header">
+                    <div class="status-indicator">
+                        <span class="pulse-circle"></span>
+                        <span id="downloadStatusText">Processing with AI...</span>
+                    </div>
+                    <span id="progressPercent" class="progress-percent">0%</span>
+                </div>
+
+                <div class="progress-bar-container">
+                    <div id="progressBarFill" class="progress-bar-fill"></div>
+                </div>
+
+                <div class="progress-meta">
+                    <span id="downloadSpeed">Status: Starting</span>
+                    <span id="downloadEta">Please wait...</span>
+                </div>
+            </div>
+
+            <!-- AI Generated Shorts Showcase (Appears when AI completes) -->
+            <div id="aiShortsCard" class="ai-shorts-card" style="display: none;">
+                <div class="ai-results-header">
+                    <div>
+                        <h2>🎬 AI Generated 9:16 Shorts</h2>
+                        <p id="aiResultsSubtitle">Viral clips are ready to preview & download</p>
+                    </div>
+                    <a id="downloadAllZipBtn" href="#" class="btn-zip-download" download>
+                        📦 Download All (.ZIP)
+                    </a>
+                </div>
+
+                <div id="shortsGrid" class="shorts-grid">
+                    <!-- Dynamic vertical 9:16 short cards inserted here -->
+                </div>
+            </div>
+
+            <!-- Full Video Download Complete & Player Box -->
+            <div id="completeCard" class="complete-card" style="display: none;">
+                <div class="success-banner">
+                    <span class="check-icon">✅</span>
+                    <div>
+                        <h3>Download Complete!</h3>
+                        <p id="downloadedFileName">video.mp4</p>
+                    </div>
+                </div>
+
+                <div class="player-wrapper">
+                    <video id="videoPlayer" controls preload="metadata" playsinline webkit-playsinline></video>
+                </div>
+
+                <div class="complete-actions">
+                    <a id="directDownloadLink" href="#" class="btn-save-file" download>
+                        💾 Save to My Computer (MP4)
+                    </a>
+                    <button type="button" id="downloadAnotherBtn" class="btn-secondary">
+                        🔄 Ek aur video download karein
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Previous Downloads Section -->
+        <section class="downloads-library glass-panel">
+            <div class="library-header">
+                <h3>📁 Saved Downloads History</h3>
+                <button type="button" id="refreshHistoryBtn" class="btn-icon" title="Refresh">🔄</button>
+            </div>
+            <div id="downloadsList" class="downloads-grid">
+                <p class="empty-state">Abhi tak koi video download nahi hui.</p>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>StreamGrabber AI • Powered by FastAPI, yt-dlp & FFmpeg • Auto 9:16 Shorts Generator</p>
+        </footer>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

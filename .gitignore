@@ -1,0 +1,28 @@
+# Cache & Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Temporary Downloads & Media
+downloads/
+ai_shorts/
+output/
+temp/
+uploads/
+*.part
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.wav
+*.m4a
+*.zip
+
+# Windows Binaries (cloud installs native Linux ffmpeg)
+bin/
+*.exe
+
+# Git & IDE
+.vscode/
+.idea/
