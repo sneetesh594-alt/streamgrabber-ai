@@ -12,6 +12,8 @@ Yeh module final output clips generate karta hai:
 import subprocess
 import json
 import os
+import tempfile
+import re
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -183,7 +185,7 @@ def _generate_srt(
 
     for seg in segments:
         # Check if segment overlaps with clip time range
-        if seg.end < start_time or seg.start > end_time:
+        if seg.end <= start_time or seg.start >= end_time:
             continue
 
         # Clip-relative times
@@ -196,7 +198,7 @@ def _generate_srt(
 
         srt_lines.append(f"{idx}")
         srt_lines.append(f"{start_str} --> {end_str}")
-        srt_lines.append(seg.text.strip())
+        srt_lines.append(re.sub(r"[{}<>]", "", seg.text.strip()).replace("\\", "").replace("\n", " "))
         srt_lines.append("")
         idx += 1
 
@@ -205,155 +207,71 @@ def _generate_srt(
 
 def _seconds_to_srt_time(seconds: float) -> str:
     """Seconds ko SRT time format me convert karo (HH:MM:SS,mmm)."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds % 1) * 1000)
+    total_ms = max(0, round(seconds * 1000))
+    secs, millis = divmod(total_ms, 1000)
+    minutes, secs = divmod(secs, 60)
+    hours, minutes = divmod(minutes, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def _generate_single_clip(
-    video_path: Path,
-    output_path: Path,
-    start_time: float,
-    end_time: float,
-    output_width: int,
-    output_height: int,
-    output_fps: int,
-    face_bbox: tuple | None,
-    srt_path: Path,
-    hook_text: str,
-    subtitle_font_size: int,
-    subtitle_font_color: str,
-    hook_font_size: int,
-    hook_font_color: str,
-):
-    """
-    FFmpeg se single clip generate karo with crop, subtitles, hook text.
-
-    FFmpeg filter chain:
-    1. Crop to 9:16 (centered on face if detected)
-    2. Scale to output resolution
-    3. Add subtitles (SRT)
-    4. Add hook text overlay at top
-    """
-    duration = end_time - start_time
-
-    # --- Build crop filter ---
-    # For 9:16 from a 16:9 source: crop width = height * 9/16
-    # We need to know source dimensions
-    source_info = _get_video_dimensions(video_path)
-    src_w, src_h = source_info
-
-    # Calculate crop dimensions for 9:16 aspect ratio
-    target_ratio = 9 / 16
-    source_ratio = src_w / src_h
-
-    if source_ratio > target_ratio:
-        # Source is wider than 9:16 → crop width
-        crop_h = src_h
-        crop_w = int(src_h * target_ratio)
-    else:
-        # Source is taller → crop height
-        crop_w = src_w
-        crop_h = int(src_w / target_ratio)
-
-    # Determine crop position
-    if face_bbox:
-        fx, fy, fw, fh = face_bbox
-        face_center_x = fx + fw // 2
-        # Center crop on face horizontally
-        crop_x = max(0, min(face_center_x - crop_w // 2, src_w - crop_w))
-        crop_y = 0  # Usually keep vertical centered
-    else:
-        # Center crop
-        crop_x = (src_w - crop_w) // 2
-        crop_y = (src_h - crop_h) // 2
-
-    # --- Escape SRT path for FFmpeg (Windows compatibility) ---
-    srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
-
-    # --- Build filter chain ---
-    filters = []
-
-    # 1. Crop to 9:16
-    filters.append(f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
-
-    # 2. Scale to output resolution
-    filters.append(f"scale={output_width}:{output_height}")
-
-    # 3. Add subtitles
-    if srt_path.exists() and srt_path.stat().st_size > 0:
-        filters.append(
-            f"subtitles='{srt_escaped}':force_style="
-            f"'FontSize={subtitle_font_size},"
-            f"PrimaryColour=&Hffffff&,"
-            f"BackColour=&H80000000&,"
-            f"BorderStyle=4,"
-            f"Outline=0,"
-            f"Shadow=0,"
-            f"MarginV=80'"
-        )
-
-    # 4. Add hook text at top
-    if hook_text:
-        # Escape single quotes for FFmpeg
-        safe_hook = hook_text.replace("'", "\\'").replace(":", "\\:")
-        # Limit to 50 chars
-        if len(safe_hook) > 50:
-            safe_hook = safe_hook[:47] + "..."
-        filters.append(
-            f"drawtext=text='{safe_hook}':"
-            f"fontsize={hook_font_size}:"
-            f"fontcolor={hook_font_color}:"
-            f"borderw=3:bordercolor=black:"
-            f"x=(w-text_w)/2:y=80:"
-            f"enable='between(t,0,5)'"  # Show for first 5 seconds
-        )
-
-    filter_str = ",".join(filters)
-
-    # --- FFmpeg command ---
-    cmd = [
-        "ffmpeg",
-        "-ss", str(start_time),
-        "-i", str(video_path),
-        "-t", str(duration),
-        "-vf", filter_str,
-        "-r", str(output_fps),
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-y",
-        str(output_path)
-    ]
-
-    console.print(f"[dim]Running FFmpeg...[/dim]")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        # Try without subtitles if that fails
-        console.print(f"[yellow]⚠ FFmpeg failed with subtitles, retrying without...[/]")
-        simple_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={output_width}:{output_height}"
-        cmd_simple = [
-            "ffmpeg",
-            "-ss", str(start_time),
-            "-i", str(video_path),
-            "-t", str(duration),
-            "-vf", simple_filter,
-            "-r", str(output_fps),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            "-y",
-            str(output_path)
-        ]
-        result = subprocess.run(cmd_simple, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg clip generation failed:\n{result.stderr}")
+def _generate_single_clip(video_path, output_path, start_time, end_time, output_width, output_height,
+                          output_fps, face_bbox, srt_path, hook_text, subtitle_font_size,
+                          subtitle_font_color, hook_font_size, hook_font_color,
+                          enable_overlay=True, creator_tag="", badge="GTA VI", frame_style="blur_bg"):
+    w, h = output_width, output_height
+    # Fixed working filenames keep user-controlled strings out of FFmpeg's filter language.
+    with tempfile.TemporaryDirectory() as folder:
+        work = Path(folder)
+        if frame_style == "fill_crop":
+            sw, sh = _get_video_dimensions(video_path)
+            cw, ch = min(sw, int(sh*w/h)), min(sh, int(sw*h/w))
+            cx = face_bbox[0] + face_bbox[2]/2 if face_bbox else sw/2
+            x = max(0, min(sw-cw, int(cx-cw/2)))
+            graph = f"[0:v]crop={cw}:{ch}:{x}:(ih-oh)/2,scale={w}:{h},setsar=1[base]"
+        else:
+            graph = (f"[0:v]split=2[back][front];[back]scale={w//4}:{h//4}:"
+                     f"force_original_aspect_ratio=increase,crop={w//4}:{h//4},"
+                     f"boxblur=12:2,scale={w}:{h},eq=brightness=-0.10[bg];"
+                     f"[front]scale={w}:{h}:force_original_aspect_ratio=decrease:"
+                     f"force_divisible_by=2,setsar=1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]")
+        layers = []
+        def label(name, value, size, position, style):
+            plain = " ".join(str(value).split())[:92]
+            if plain:
+                (work / name).write_text(plain, encoding="utf-8")
+                layers.append(f"drawtext=font='DejaVu Sans\\:style=Bold':textfile={name}:expansion=none:"
+                              f"fontsize={size}:{position}:{style}")
+        if enable_overlay:
+            label("badge.txt", badge, round(w*.038), "x=w*.055:y=h*.06",
+                  "fontcolor=white:box=1:boxcolor=0xBB3054:boxborderw=7")
+            label("creator.txt", creator_tag, round(w*.032), "x=w-tw-w*.055:y=h*.06",
+                  "fontcolor=white:box=1:boxcolor=black@.65:boxborderw=7")
+            import textwrap
+            if hook_text:
+                clean_hook = " ".join(str(hook_text).split())
+                (work/"hook.txt").write_text("\n".join(textwrap.wrap(clean_hook[:75], 27)), encoding="utf-8")
+                layers.append(f"drawtext=font='DejaVu Sans\\:style=Bold':textfile=hook.txt:expansion=none:"
+                              f"fontsize={min(hook_font_size,round(w*.046))}:fontcolor=white:borderw=2:"
+                              "bordercolor=black:x=(w-tw)/2:y=h*.17:alpha='min(1,max(0,8-t))'")
+        if srt_path and Path(srt_path).exists() and Path(srt_path).stat().st_size:
+            import shutil
+            shutil.copyfile(srt_path, work/"captions.srt")
+            layers.append("subtitles=captions.srt:force_style='FontName=DejaVu Sans,Alignment=2,"
+                          f"FontSize={max(10,round(subtitle_font_size*288/1080))},MarginV=28,Outline=2'")
+        layers += [f"fps={output_fps}", "format=yuv420p"]
+        graph += ";[base]" + ",".join(layers) + "[v]"
+        target = Path(output_path).resolve()
+        temp = target.with_suffix(".part.mp4")
+        try:
+            cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", str(start_time),
+                   "-i", str(Path(video_path).resolve()), "-t", str(end_time-start_time),
+                   "-filter_complex_threads", "2", "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
+                   "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "22",
+                   "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(temp)]
+            subprocess.run(cmd, cwd=work, check=True, capture_output=True, timeout=360)
+            temp.replace(target)
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 def _generate_thumbnail(

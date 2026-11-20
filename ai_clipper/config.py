@@ -3,7 +3,10 @@ Configuration settings for the AI Video Clipper pipeline.
 Yahan sab default configs hain - weights, thresholds, paths, etc.
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+load_dotenv(override=False)
 from pydantic import Field
 from pathlib import Path
 from typing import Optional
@@ -18,7 +21,7 @@ class ClipperConfig(BaseSettings):
     models_dir: Path = Field(default=Path("./models"), description="Cached models directory")
 
     # --- Video Download ---
-    max_video_length_minutes: int = Field(default=180, description="Max video length in minutes")
+    max_video_length_minutes: int = Field(default=1440, description="Max video length in minutes")
     preferred_quality: str = Field(default="720p", description="Download quality (360p/480p/720p/1080p)")
 
     # --- Scene Detection ---
@@ -68,8 +71,8 @@ class ClipperConfig(BaseSettings):
     max_clips: int = Field(default=10, description="Maximum number of clips to generate")
 
     # --- Clip Output ---
-    clip_duration_min_sec: float = Field(default=15.0, description="Minimum clip duration in seconds")
-    clip_duration_max_sec: float = Field(default=60.0, description="Maximum clip duration in seconds")
+    clip_duration_min_sec: float = Field(default=20.0, description="Minimum clip duration in seconds")
+    clip_duration_max_sec: float = Field(default=45.0, description="Maximum clip duration in seconds")
     clip_duration_target_sec: float = Field(default=30.0, description="Target clip duration in seconds")
     output_width: int = Field(default=1080, description="Output video width (9:16)")
     output_height: int = Field(default=1920, description="Output video height (9:16)")
@@ -92,10 +95,15 @@ class ClipperConfig(BaseSettings):
         description="Default hashtags for generated clips"
     )
 
-    class Config:
-        env_prefix = "CLIPPER_"
-        env_file = ".env"
+    enable_overlay: bool = True
+    creator_tag: str = ""
+    overlay_badge: str = "GTA VI"
+    frame_style: str = "blur_bg"
+    use_clip: bool = True
+    use_face: bool = True
+    scan_budget: int = Field(default=14, ge=1, le=120)
+    min_highlight_score: float = Field(default=.33, ge=0, le=1)
+    model_config = SettingsConfigDict(env_prefix="CLIPPER_", env_file=".env", extra="ignore")
 
 
-# Global config instance - import this wherever needed
 config = ClipperConfig()

@@ -26,3 +26,12 @@ bin/
 # Git & IDE
 .vscode/
 .idea/
+
+.env.*
+!.env.example
+cookies*.txt
+*credentials*.json
+billing-reader.json
+.venv/
+.pytest_cache/
+!ai_clipper/studio/assets/sample.mp4

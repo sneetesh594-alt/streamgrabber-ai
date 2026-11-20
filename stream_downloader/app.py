@@ -5,13 +5,10 @@ import json
 import shutil
 import asyncio
 import subprocess
-import zipfile
 import wave
 import struct
 import math
 import re
-import random
-import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -49,10 +46,9 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
-# Gemini API Key (set via environment variable in Cloud / Render)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-
-app = FastAPI(title="StreamGrabber AI", version="3.0.0")
+# Keep the existing downloader alongside the shared evidence-based studio.
+from ai_clipper.web_ui import app
+from ai_clipper.sources import stream_url
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/media", StaticFiles(directory=str(DOWNLOADS_DIR)), name="media")
@@ -61,7 +57,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # In-memory storage for download & AI jobs
 JOBS: Dict[str, Dict[str, Any]] = {}
-AI_JOBS: Dict[str, Dict[str, Any]] = {}
+
 
 
 class VideoInfoRequest(BaseModel):
@@ -76,18 +72,6 @@ class DownloadRequest(BaseModel):
     end_time: Optional[str] = None
 
 
-class AIShortsRequest(BaseModel):
-    url: str
-    num_clips: int = 3
-    clip_duration: int = 30
-    quality: str = "1080p"  # "1080p" or "720p"
-    frame_style: str = "blur_bg"  # "blur_bg" or "fill_crop"
-    hook_style: str = "gaming"
-    enable_overlay: bool = True  # Toggle for GTA VI & Creator Overlay
-    overlay_badge: str = "GTA VI"  # Badge logo / text
-    creator_tag: Optional[str] = None  # Optional @Username override
-
-
 def find_node_path() -> Optional[str]:
     for cand in [shutil.which("node"), shutil.which("nodejs"), "/usr/bin/node", "/usr/bin/nodejs", "/usr/local/bin/node", r"C:\Program Files\nodejs\node.exe"]:
         if cand and Path(cand).exists():
@@ -98,24 +82,10 @@ NODE_PATH = find_node_path()
 
 
 def normalize_url(url: str) -> str:
-    """
-    Supports YouTube, Twitch, Kick, Instagram, TikTok, Twitter/X, Facebook, etc.
-    YouTube URLs are canonicalized to watch?v=ID.
-    Social links have tracking parameters stripped.
-    """
-    url = url.strip()
-    # YouTube Normalization
-    yt_match = re.search(r'(?:v=|\/live\/|\/shorts\/|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})', url)
-    if yt_match:
-        return f"https://www.youtube.com/watch?v={yt_match.group(1)}"
-
-    # Social Media / Other Platform URLs (Twitch, Kick, Instagram, TikTok, Twitter/X)
-    if "?" in url:
-        u_low = url.lower()
-        if any(p in u_low for p in ["instagram.com", "tiktok.com", "twitter.com", "x.com", "fb.watch", "facebook.com"]):
-            return url.split("?")[0]
-
-    return url
+    try:
+        return stream_url(url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 def get_ydl_base_opts(for_url: Optional[str] = None) -> Dict[str, Any]:
@@ -185,7 +155,7 @@ def get_bold_font_path() -> str:
     return "Sans:style=Bold"
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/downloader", response_class=HTMLResponse)
 async def index(request: Request):
     has_ffmpeg = check_ffmpeg_installed()
     return templates.TemplateResponse(
@@ -240,7 +210,7 @@ async def get_video_info(data: VideoInfoRequest):
             "uploader": uploader,
             "thumbnail": info.get("thumbnail"),
             "duration": duration_str,
-            "duration_sec": duration_sec or 3600,
+            "duration_sec": duration_sec or 0,
             "is_live": is_live,
             "was_live": was_live,
             "view_count": info.get("view_count", 0),
@@ -417,343 +387,6 @@ async def get_progress(job_id: str):
 # =====================================================================
 # AI GEMINI HOOK GENERATOR & ULTRA-FAST SMART SEGMENT CLIPPING
 # =====================================================================
-
-def generate_gemini_hooks(video_title: str, num_hooks: int = 5, hook_style: str = "gaming") -> List[str]:
-    """Gemini AI API se ultra-viral hooks generate karta hai."""
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
-        style_prompt = "high-energy gaming excitement" if hook_style == "gaming" else "shocking dramatic plot twist"
-        prompt = (
-            f"Generate {num_hooks} ultra viral, punchy video hook phrases with {style_prompt} "
-            f"for a vertical 9:16 Short based on this title: '{video_title}'. "
-            f"Make each under 6 words, all uppercase, with 1-2 emojis. "
-            f"Return ONLY a raw JSON array of strings, for example: [\"🔥 INSANE MOMENT EVER!\", \"💀 BRO DID NOT SURVIVE THAT\"]"
-        )
-        payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode()
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("\n", 1)[0].replace("json", "").strip()
-            parsed = json.loads(text)
-            if isinstance(parsed, list) and len(parsed) > 0:
-                return [str(h).strip() for h in parsed[:num_hooks]]
-    except Exception as e:
-        print(f"Gemini API Hook Generation note: {e}")
-
-    # Rock-solid high-energy gaming & viral hooks
-    fallback_hooks = [
-        "🔥 INSANE CLUTCH MOMENT!",
-        "💥 UNBELIEVABLE GAMEPLAY!",
-        "⚡ 1 IN A MILLION ESCAPE!",
-        "🚨 WHAT JUST HAPPENED?!",
-        "💀 BRO DID NOT SURVIVE THAT",
-        "🏆 PEAK GAMER MOMENT!",
-        "🚗 CRAZIEST GETAWAY EVER!",
-        "🎯 PURE SKILL NO LUCK!",
-    ]
-    random.shuffle(fallback_hooks)
-    return fallback_hooks[:num_hooks]
-
-
-def _run_ai_shorts_pipeline(job_id: str, req: AIShortsRequest):
-    """
-    Lightning-Fast & 100% Reliable AI Shorts Pipeline:
-    1. Extracts metadata in 1-2s (Zero 403 Forbidden!)
-    2. Smart multi-point highlight timestamp selection across active gameplay
-    3. Gemini AI generates tailored viral hooks in 1-2s
-    4. Downloads ONLY the 30s segments with MP4/HLS direct range seeking (12s per clip)
-    5. Applies 9:16 layout, blurred canvas, optional GTA VI & @Creator Bold Overlays
-    6. Bundles into ZIP & displays on website
-    """
-    job_folder = CLIPS_DIR / job_id
-    job_folder.mkdir(parents=True, exist_ok=True)
-    target_url = normalize_url(req.url)
-
-    AI_JOBS[job_id].update({
-        "status": "running",
-        "stage": "Fetching stream details...",
-        "percent": 10,
-    })
-
-    try:
-        # Step 1: Extract Video Info
-        ydl_info_opts = get_ydl_base_opts(for_url=target_url)
-        with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
-            info = ydl.extract_info(target_url, download=False)
-            video_title = info.get("title", "Stream")
-            uploader = (
-                info.get("uploader") or 
-                info.get("channel") or 
-                info.get("creator") or 
-                info.get("uploader_id") or 
-                "Creator"
-            )
-            duration_total = float(info.get("duration") or 600)
-
-        AI_JOBS[job_id]["stage"] = "AI selecting high-action highlight moments..."
-        AI_JOBS[job_id]["percent"] = 25
-
-        # Step 2: Instant Smart Highlight Selection (Zero 403 & No 500MB download bottleneck!)
-        num_clips = max(1, min(req.num_clips, 8))
-        clip_dur = max(15, min(req.clip_duration, 60))
-
-        if duration_total <= clip_dur + 10:
-            candidate_starts = [0.0]
-        elif duration_total <= 300:
-            step = (duration_total - clip_dur) / max(num_clips, 1)
-            candidate_starts = [i * step for i in range(num_clips)]
-        else:
-            # For multi-hour or long streams: Skip intro buffer (min 300s) & outro
-            intro_skip = min(600.0, max(180.0, duration_total * 0.05))
-            outro_skip = max(clip_dur + 60.0, duration_total * 0.05)
-            active_duration = max(clip_dur + 30.0, duration_total - intro_skip - outro_skip)
-
-            step = active_duration / (num_clips + 1)
-            candidate_starts = []
-            for i in range(num_clips):
-                base_time = intro_skip + step * (i + 1)
-                # Add natural offset (+- 15s to 30s)
-                jitter = random.uniform(-15.0, 15.0) if step > 60 else 0
-                st = max(intro_skip, min(duration_total - outro_skip, base_time + jitter))
-                candidate_starts.append(round(st, 1))
-
-        # Step 3: Gemini AI Viral Hooks
-        AI_JOBS[job_id]["stage"] = "Gemini AI crafting viral hooks & badges..."
-        AI_JOBS[job_id]["percent"] = 35
-
-        gemini_hooks = generate_gemini_hooks(video_title, num_hooks=len(candidate_starts), hook_style=req.hook_style)
-
-        # Setup Overlay Configuration
-        bold_font = get_bold_font_path()
-        # Clean creator tag
-        if req.creator_tag and req.creator_tag.strip():
-            raw_tag = req.creator_tag.strip()
-            creator_tag = raw_tag if raw_tag.startswith("@") else f"@{raw_tag}"
-        else:
-            clean_up = re.sub(r'[^a-zA-Z0-9_]', '', uploader) or "Creator"
-            creator_tag = f"@{clean_up}"
-
-        badge_logo = (req.overlay_badge or "GTA VI").strip().upper()
-
-        # Step 4: Download ONLY Segments and Render 9:16 Vertical Shorts
-        generated_clips = []
-        clip_progress_slice = 60.0 / max(len(candidate_starts), 1)
-
-        # Quality & Resolution Config
-        q_lower = (req.quality or "1080p").lower()
-        if "720" in q_lower or "780" in q_lower:
-            W, H = 720, 1280
-            max_h = 720
-            badge_font_sz = 34
-            tag_font_sz = 30
-            hook_font_sz = 40
-            top_y = 60
-            banner_y = 160
-        else:
-            W, H = 1080, 1920
-            max_h = 1080
-            badge_font_sz = 44
-            tag_font_sz = 38
-            hook_font_sz = 52
-            top_y = 80
-            banner_y = 240
-
-        for i, start_t in enumerate(candidate_starts):
-            clip_idx = i + 1
-            clip_name = f"Short_{clip_idx:02d}_{job_id[:4]}.mp4"
-            thumb_name = f"Short_{clip_idx:02d}_{job_id[:4]}.jpg"
-            out_clip_path = job_folder / clip_name
-            out_thumb_path = job_folder / thumb_name
-            hook_text = gemini_hooks[i % len(gemini_hooks)]
-
-            AI_JOBS[job_id]["stage"] = f"Cutting 9:16 Short #{clip_idx}/{len(candidate_starts)}: '{hook_text}'..."
-            AI_JOBS[job_id]["percent"] = round(35 + (i * clip_progress_slice), 1)
-
-            # Download just this segment using fast MP4/HLS range seeking
-            segment_raw = job_folder / f"seg_raw_{clip_idx}.mp4"
-            ydl_seg_opts = get_ydl_base_opts(for_url=target_url)
-            ydl_seg_opts.update({
-                "format": (
-                    f"bestvideo[height<={max_h}][ext=mp4]+bestaudio[ext=m4a]/"
-                    f"bestvideo[height<={max_h}]+bestaudio/"
-                    f"best[height<={max_h}]/"
-                    f"best"
-                ),
-                "outtmpl": str(segment_raw),
-                "download_ranges": yt_dlp.utils.download_range_func(None, [(start_t, start_t + clip_dur)]),
-                "force_keyframes_at_cuts": False,
-                "merge_output_format": "mp4",
-                "socket_timeout": 30,
-            })
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_seg_opts) as ydl:
-                    ydl.download([target_url])
-            except Exception as dl_err:
-                print(f"Segment #{clip_idx} download error: {dl_err}")
-
-            if not segment_raw.exists():
-                matched = list(job_folder.glob(f"seg_raw_{clip_idx}*"))
-                if matched:
-                    segment_raw = matched[0]
-
-            if segment_raw.exists():
-                # Safe sanitized text for FFmpeg drawtext
-                safe_hook = re.sub(r'[\'":\\]', '', hook_text)
-                safe_badge = re.sub(r'[\'":\\]', '', badge_logo)
-                safe_tag = re.sub(r'[\'":\\]', '', creator_tag)
-
-                # Build FFmpeg Filter Chain
-                filter_parts = []
-                
-                # Framing Layout
-                if req.frame_style == "fill_crop":
-                    filter_parts.append(f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale={W}:{H}[base]")
-                else:
-                    # Ambient Blur Canvas (Character & Side views 100% visible)
-                    filter_parts.append(
-                        f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=25:5[bg];"
-                        f"[0:v]scale={W}:-2[fg];"
-                        f"[bg][fg]overlay=0:(H-h)/2[base]"
-                    )
-
-                # Overlays
-                overlay_draws = []
-
-                # Optional GTA VI & Creator Overlays
-                if req.enable_overlay:
-                    # GTA VI Logo / Badge (Top-Left, Neon Magenta box with bold white text)
-                    overlay_draws.append(
-                        f"drawtext=text='{safe_badge}':fontfile='{bold_font}':fontsize={badge_font_sz}:"
-                        f"fontcolor=white:box=1:boxcolor=0xE0115F@0.9:boxborderw=12:x=50:y={top_y}"
-                    )
-                    # Creator @Username Badge (Top-Right, Translucent Dark box with bold yellow text)
-                    overlay_draws.append(
-                        f"drawtext=text='{safe_tag}':fontfile='{bold_font}':fontsize={tag_font_sz}:"
-                        f"fontcolor=0xFFE600:box=1:boxcolor=0x000000@0.8:boxborderw=10:x=w-text_w-50:y={top_y}"
-                    )
-
-                # Viral Hook Text Banner (Centered, first 7 seconds)
-                overlay_draws.append(
-                    f"drawtext=text='{safe_hook}':fontfile='{bold_font}':fontsize={hook_font_sz}:"
-                    f"fontcolor=yellow:borderw=4:bordercolor=black:x=(w-text_w)/2:y={banner_y}:enable='between(t,0,7)'"
-                )
-
-                if req.frame_style == "fill_crop":
-                    combined_filter = filter_parts[0].replace("[base]", "") + "," + ",".join(overlay_draws)
-                    filter_args = ["-vf", combined_filter]
-                else:
-                    draw_chain = ",".join(overlay_draws)
-                    combined_filter = filter_parts[0] + f";[base]{draw_chain}[vfinal]"
-                    filter_args = ["-filter_complex", combined_filter, "-map", "[vfinal]", "-map", "0:a?"]
-
-                cmd_cut = [
-                    FFMPEG_EXE,
-                    "-i", str(segment_raw),
-                    "-t", str(clip_dur),
-                    *filter_args,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    "-y", str(out_clip_path)
-                ]
-                subprocess.run(cmd_cut, capture_output=True)
-
-                # Thumbnail
-                cmd_thumb = [
-                    FFMPEG_EXE,
-                    "-ss", "00:00:02",
-                    "-i", str(out_clip_path),
-                    "-vframes", "1",
-                    "-q:v", "2",
-                    "-y", str(out_thumb_path)
-                ]
-                subprocess.run(cmd_thumb, capture_output=True)
-
-                if out_clip_path.exists():
-                    start_m, start_s = divmod(int(start_t), 60)
-                    end_m, end_s = divmod(int(start_t + clip_dur), 60)
-                    time_range = f"{start_m:02d}:{start_s:02d} - {end_m:02d}:{end_s:02d}"
-
-                    generated_clips.append({
-                        "id": clip_idx,
-                        "title": f"Clip #{clip_idx}: {hook_text}",
-                        "filename": clip_name,
-                        "thumbnail": thumb_name,
-                        "time_range": time_range,
-                        "duration": clip_dur,
-                        "score": f"{94 + (clip_idx * 2) % 6}%",
-                        "media_url": f"/media/ai_shorts/{job_id}/{clip_name}",
-                        "download_url": f"/media/ai_shorts/{job_id}/{clip_name}",
-                        "thumb_url": f"/media/ai_shorts/{job_id}/{thumb_name}",
-                    })
-
-                # Cleanup raw segment
-                try:
-                    segment_raw.unlink()
-                except Exception:
-                    pass
-
-        # Step 5: Bundle into ZIP
-        zip_filename = f"AI_Shorts_{job_id[:6]}.zip"
-        zip_path = job_folder / zip_filename
-        with zipfile.ZipFile(str(zip_path), 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for clip in generated_clips:
-                c_path = job_folder / clip["filename"]
-                if c_path.exists():
-                    zipf.write(str(c_path), arcname=clip["filename"])
-
-        AI_JOBS[job_id].update({
-            "status": "completed",
-            "percent": 100,
-            "stage": "All 9:16 Shorts ready!",
-            "clips": generated_clips,
-            "zip_url": f"/media/ai_shorts/{job_id}/{zip_filename}",
-            "video_title": video_title,
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        AI_JOBS[job_id].update({
-            "status": "error",
-            "error": str(e)
-        })
-
-
-@app.post("/api/ai-shorts")
-async def start_ai_shorts(req: AIShortsRequest, background_tasks: BackgroundTasks):
-    url = req.url.strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-
-    job_id = str(uuid.uuid4())
-    AI_JOBS[job_id] = {
-        "job_id": job_id,
-        "url": url,
-        "status": "starting",
-        "stage": "Initializing AI Clipper...",
-        "percent": 5,
-        "speed": "Starting...",
-        "eta": "calculating...",
-        "clips": [],
-        "zip_url": None,
-        "error": None,
-    }
-
-    background_tasks.add_task(_run_ai_shorts_pipeline, job_id, req)
-    return {"success": True, "job_id": job_id}
-
-
-@app.get("/api/ai-shorts/progress/{job_id}")
-async def get_ai_shorts_progress(job_id: str):
-    if job_id not in AI_JOBS:
-        raise HTTPException(status_code=404, detail="AI Job not found")
-    return AI_JOBS[job_id]
-
 
 @app.get("/api/downloads")
 async def list_downloads():

@@ -9,6 +9,10 @@ Yeh module sabhi stages ko sequence me run karta hai:
 
 import json
 import shutil
+import os
+import tempfile
+import subprocess
+from dataclasses import replace
 import time
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -29,222 +33,144 @@ class PipelineResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_pipeline(
-    source: str,
-    output_dir: str | Path = "./output",
-    config=None,
-) -> PipelineResult:
-    """
-    Full AI Video Clipper pipeline run karo.
-
-    Args:
-        source: YouTube URL ya local file path
-        output_dir: Output directory for generated clips
-        config: ClipperConfig instance (default: global config)
-
-    Returns:
-        PipelineResult with generated clips and metadata
-    """
-    if config is None:
-        from .config import config as default_config
-        config = default_config
-
+def run_pipeline(source, output_dir="./output", config=None, progress=None):
+    from .config import config as defaults
+    from .downloader import get_video_info
+    from .sources import metadata, scan_ranges, fetch_section, make_proxy
+    from .audio_analyzer import extract_audio, transcribe_audio, analyze_audio_energy
+    from .visual_analyzer import analyze_visual
+    from .scene_detector import detect_scenes
+    from .moments import candidates, duplicate, verify
+    from .gemini_review import review
+    from .clip_generator import (GeneratedClip, _generate_single_clip, _generate_srt,
+                                 _generate_thumbnail, _generate_title, _generate_hashtags)
+    config = config or defaults
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = output_dir / "temp"
-    temp_dir.mkdir(exist_ok=True)
-
     result = PipelineResult(output_dir=output_dir)
-    start_time = time.time()
-
-    console.print("\n[bold magenta]" + "=" * 60 + "[/]")
-    console.print("[bold magenta]  🎬 AI VIDEO CLIPPER PIPELINE  [/]")
-    console.print("[bold magenta]" + "=" * 60 + "[/]\n")
-
+    report = progress or (lambda n, msg: console.print(f"[cyan]{n}%[/] {msg}"))
+    started = time.monotonic()
+    warnings, observations, covered, all_speech = [], [], [], []
+    remote = str(source).startswith(("https://", "http://"))
     try:
-        # ============================================================
-        # STAGE 1: INGESTION - Video download ya load
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 1: Ingestion ━━━[/]")
-
-        from .downloader import download_video, load_local_video
-
-        source_path = Path(source)
-        if source_path.exists():
-            video_info = load_local_video(source_path)
-        else:
-            # Assume it's a URL
-            video_info = download_video(
-                url=source,
-                output_dir=temp_dir,
-                quality=config.preferred_quality,
-                max_duration_min=config.max_video_length_minutes,
-            )
-
-        result.metadata["source"] = source
-        result.metadata["title"] = video_info.title
-        result.metadata["duration_sec"] = video_info.duration_sec
-        result.metadata["resolution"] = f"{video_info.width}x{video_info.height}"
-
-        console.print(
-            f"\n[green]✓ Video loaded:[/] {video_info.title} "
-            f"({video_info.duration_sec:.0f}s)\n"
-        )
-
-        # ============================================================
-        # STAGE 2: SCENE DETECTION
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 2: Scene Detection ━━━[/]")
-
-        from .scene_detector import detect_scenes
-
-        scenes = detect_scenes(
-            video_path=video_info.filepath,
-            threshold=config.scene_threshold,
-            min_scene_len_sec=config.min_scene_length_sec,
-        )
-        result.metadata["num_scenes"] = len(scenes)
-        console.print()
-
-        # ============================================================
-        # STAGE 3: AUDIO ANALYSIS (Whisper + Energy)
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 3: Audio Analysis ━━━[/]")
-
-        from .audio_analyzer import extract_audio, transcribe_audio, analyze_audio_energy
-
-        audio_path = extract_audio(video_info.filepath, temp_dir / "audio.wav")
-
-        transcript_segments = transcribe_audio(
-            audio_path=audio_path,
-            model_name=config.whisper_model,
-            language=config.whisper_language,
-        )
-
-        audio_features = analyze_audio_energy(
-            audio_path=audio_path,
-            hop_length=config.audio_hop_length,
-            frame_length=config.audio_frame_length,
-            loudness_percentile=config.loudness_threshold_percentile,
-        )
-
-        result.metadata["num_transcript_segments"] = len(transcript_segments)
-        result.metadata["num_audio_peaks"] = len(audio_features.peaks)
-
-        # Save transcript
-        transcript_file = output_dir / "transcript.json"
-        _save_transcript(transcript_segments, transcript_file)
-        console.print()
-
-        # ============================================================
-        # STAGE 4: VISUAL ANALYSIS (CLIP + Face + Motion)
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 4: Visual Analysis ━━━[/]")
-
-        from .visual_analyzer import analyze_visual
-
-        visual_analysis = analyze_visual(
-            video_path=video_info.filepath,
-            sample_fps=config.clip_sample_fps,
-            clip_prompts=config.clip_prompts,
-        )
-
-        result.metadata["num_analyzed_frames"] = len(visual_analysis.frame_scores)
-        console.print()
-
-        # ============================================================
-        # STAGE 5: NLP SCORING
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 5: NLP Scoring ━━━[/]")
-
-        from .nlp_scorer import score_transcript_segments
-
-        text_scores = score_transcript_segments(transcript_segments)
-        console.print()
-
-        # ============================================================
-        # STAGE 6: SIGNAL FUSION & PEAK DETECTION
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 6: Signal Fusion ━━━[/]")
-
-        from .scorer import build_scored_timeline, find_highlights
-
-        timeline = build_scored_timeline(
-            duration_sec=video_info.duration_sec,
-            audio_features=audio_features,
-            text_scores=text_scores,
-            visual_analysis=visual_analysis,
-            weight_audio=config.weight_audio,
-            weight_text=config.weight_text,
-            weight_visual=config.weight_visual,
-        )
-
-        highlights = find_highlights(
-            timeline=timeline,
-            min_distance_sec=config.peak_min_distance_sec,
-            peak_prominence=config.peak_prominence,
-            max_clips=config.max_clips,
-            clip_duration_min=config.clip_duration_min_sec,
-            clip_duration_max=config.clip_duration_max_sec,
-            clip_duration_target=config.clip_duration_target_sec,
-        )
-
-        # Add hook text from NLP
-        from .nlp_scorer import get_hook_text_at_time
-        for h in highlights:
-            h.hook_text = get_hook_text_at_time(text_scores, h.peak_time)
-
-        console.print()
-
-        # ============================================================
-        # STAGE 7: CLIP GENERATION
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 7: Clip Generation ━━━[/]")
-
-        from .clip_generator import generate_clips
-
-        generated_clips = generate_clips(
-            video_path=video_info.filepath,
-            highlights=highlights,
-            transcript_segments=transcript_segments,
-            visual_analysis=visual_analysis,
-            text_scores=text_scores,
-            output_dir=output_dir,
-            output_width=config.output_width,
-            output_height=config.output_height,
-            output_fps=config.output_fps,
-            subtitle_font_size=config.subtitle_font_size,
-            subtitle_font_color=config.subtitle_font_color,
-            subtitle_bg_color=config.subtitle_bg_color,
-            hook_font_size=config.hook_font_size,
-            hook_font_color=config.hook_font_color,
-            default_hashtags=config.default_hashtags,
-            video_title=video_info.title,
-        )
-
-        result.clips = generated_clips
-        console.print()
-
-        # ============================================================
-        # STAGE 8: PACKAGING & METADATA
-        # ============================================================
-        console.print("[bold yellow]━━━ STAGE 8: Packaging ━━━[/]")
-
-        _save_metadata(result, output_dir)
-        console.print()
-
-    except Exception as e:
-        result.errors.append(str(e))
-        console.print(f"\n[bold red]❌ Pipeline error: {e}[/]")
-        import traceback
-        traceback.print_exc()
-
-    finally:
-        result.runtime_sec = time.time() - start_time
-
-    # Print summary
-    _print_summary(result)
-
+        with tempfile.TemporaryDirectory(prefix="studio-") as tmp:
+            temp = Path(tmp)
+            report(4, "Reading source metadata")
+            if remote:
+                info = metadata(source)
+                title, duration = info.get("title", "Gameplay"), float(info["duration"])
+                coverage = scan_ranges(info, config.scan_budget)
+            else:
+                source = Path(source).resolve()
+                info = get_video_info(source)
+                title, duration = info.title, info.duration_sec
+                # Process local recordings completely, with overlap at batch edges.
+                coverage = scan_ranges({"duration": duration}, max(2, int(duration/48)+3))
+            if duration > config.max_video_length_minutes * 60:
+                raise ValueError("Recording exceeds the configured maximum duration.")
+            result.metadata.update(title=title, duration_sec=duration, source="platform VOD" if remote else "uploaded recording")
+            report(9, f"Inspecting {len(coverage)} source sections")
+            for index, (start, end) in enumerate(coverage):
+                progress_n = 10 + round(60*index/len(coverage))
+                report(progress_n, f"Reading section {index+1} of {len(coverage)}")
+                proxy = temp / f"scan-{index}.mp4"
+                if remote:
+                    section = temp / f"source-{index}.mp4"
+                    try:
+                        fetch_section(source, start, end, section, 360)
+                    except ValueError as exc:
+                        if "refused access" in str(exc) or len(coverage) == 1:
+                            raise
+                        warnings.append(f"Section {index+1} was unavailable.")
+                        continue
+                    make_proxy(section, proxy, 0, end-start)
+                    section.unlink()
+                else:
+                    make_proxy(source, proxy, start, end-start)
+                actual = min(get_video_info(proxy).duration_sec, end-start)
+                covered.append([start, start+actual])
+                report(progress_n+1, f"Measuring motion and gameplay in section {index+1}")
+                visual = analyze_visual(proxy, sample_fps=config.clip_sample_fps, use_clip=config.use_clip,
+                                        use_face_detection=False)
+                if not any(f.gameplay is not None for f in visual.frame_scores) and config.use_clip:
+                    warnings.append("Local gameplay model unavailable. Cloud verification is required for these frames.")
+                if sum(f.motion_score > .13 and not f.black for f in visual.frame_scores) < 4:
+                    continue
+                scenes = detect_scenes(proxy, config.scene_threshold, config.min_scene_length_sec)
+                speech, energy = [], None
+                audio_stream = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                     "-show_entries", "stream=index", "-of", "csv=p=0", str(proxy)], capture_output=True, check=True)
+                if audio_stream.stdout.strip():
+                    audio = extract_audio(proxy, temp / f"audio-{index}.wav")
+                    energy = analyze_audio_energy(audio, config.audio_hop_length, config.audio_frame_length)
+                    try:
+                        speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
+                    except (OSError, RuntimeError, ImportError, ValueError):
+                        warnings.append("Speech model unavailable; captions could not be generated for this section.")
+                    all_speech.extend(replace(seg,start=seg.start+start,end=seg.end+start) for seg in speech)
+                    audio.unlink(missing_ok=True)
+                observations.extend(candidates(proxy, start, actual, visual, energy, speech, scenes, config))
+            if not covered:
+                raise ValueError("The video host did not return any inspectable sections.")
+            result.metadata["scanned_ranges"] = covered
+            result.metadata["warnings"] = list(dict.fromkeys(warnings))
+            report(72, "Verifying and deduplicating candidate moments")
+            selected = []
+            for moment in sorted(observations, key=lambda m: -m.score):
+                if duplicate(moment, selected) or moment.score < config.min_highlight_score:
+                    continue
+                verdict = None
+                if os.getenv("GEMINI_REVIEW_ENABLED", "").lower() == "true":
+                    preview = temp/"review.mp4"
+                    make_proxy(moment.proxy, preview, moment.start-moment.scan_start, moment.end-moment.start, 224)
+                    verdict = review(preview, " ".join(s.text for s in moment.speech))
+                if verify(moment, verdict, config):
+                    selected.append(moment)
+                    if len(selected) >= config.max_clips:
+                        break
+            for folder in ("clips", "subtitles", "thumbnails"):
+                (output_dir/folder).mkdir(exist_ok=True)
+            for idx, moment in enumerate(selected, 1):
+                report(78 + int(20*(idx-1)/len(selected)), f"Rendering clip {idx} of {len(selected)}")
+                original, cut_start = source, moment.start
+                if remote:
+                    original = temp/f"export-{idx}.mp4"
+                    fetch_section(source, moment.start, moment.end, original, config.output_height)
+                    cut_start = 0
+                basename = f"clip_{idx:02d}"
+                subs = output_dir/"subtitles"/(basename+".srt")
+                _generate_srt(moment.speech, moment.start-moment.scan_start, moment.end-moment.scan_start, subs)
+                path = output_dir/"clips"/(basename+".mp4")
+                thumb = output_dir/"thumbnails"/(basename+"_thumb.jpg")
+                w, h = config.output_width, config.output_height
+                box = None
+                if config.frame_style == "fill_crop" and config.use_face:
+                    from .face_tracker import track_subject_in_clip
+                    track = track_subject_in_clip(original, cut_start, cut_start+moment.end-moment.start,
+                                                  config.tracker_type, config.face_detection_interval)
+                    tracked = sorted((f.bbox for f in track.frames if f.bbox), key=lambda b: b[0]+b[2]/2)
+                    if tracked:
+                        box = tracked[len(tracked)//2]
+                _generate_single_clip(original, path, cut_start, cut_start+moment.end-moment.start, w,h,
+                    config.output_fps, box, subs, moment.hook, config.subtitle_font_size, config.subtitle_font_color,
+                    config.hook_font_size, config.hook_font_color, config.enable_overlay, config.creator_tag,
+                    config.overlay_badge, config.frame_style)
+                _generate_thumbnail(original, cut_start+moment.peak-moment.start, thumb)
+                clip = GeneratedClip(idx, path, thumb, moment.start, moment.end, moment.end-moment.start,
+                    moment.score, _generate_title(title, moment.hook, idx), moment.hook,
+                    _generate_hashtags(moment.hook, config.default_hashtags), subs)
+                clip.evidence = moment.evidence
+                result.clips.append(clip)
+            unique_speech = {(round(s.start,1),s.text): s for s in all_speech}
+            _save_transcript(sorted(unique_speech.values(), key=lambda s:s.start), output_dir/"transcript.json")
+            result.runtime_sec = time.monotonic()-started
+            _save_metadata(result, output_dir)
+            report(100, "Clips ready" if selected else "No qualifying gameplay found in the inspected footage")
+    except (ValueError, FileNotFoundError) as exc:
+        result.errors.append(str(exc) if isinstance(exc, ValueError) else "Input or processing dependency is unavailable.")
+    except Exception as exc:
+        result.errors.append(f"Processing failed ({type(exc).__name__}). Check installed models and FFmpeg.")
+    result.runtime_sec = time.monotonic()-started
     return result
 
 
@@ -265,7 +191,9 @@ def _save_transcript(segments: list, filepath: Path):
 def _save_metadata(result: PipelineResult, output_dir: Path):
     """Clips metadata aur summary save karo."""
     metadata = {
-        "pipeline_version": "0.1.0",
+        "pipeline_version": "4.0",
+        "scanned_ranges": result.metadata.get("scanned_ranges", []),
+        "warnings": result.metadata.get("warnings", []),
         "source": result.metadata.get("source", ""),
         "title": result.metadata.get("title", ""),
         "runtime_sec": result.runtime_sec,
@@ -285,6 +213,7 @@ def _save_metadata(result: PipelineResult, output_dir: Path):
             "title": clip.title,
             "hook_text": clip.hook_text,
             "hashtags": clip.hashtags,
+            "evidence": getattr(clip, "evidence", ""),
         })
 
     metadata_path = output_dir / "clips_metadata.json"

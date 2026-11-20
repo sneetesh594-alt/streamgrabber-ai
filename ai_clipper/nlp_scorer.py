@@ -37,7 +37,7 @@ EXCITING_KEYWORDS = {
         "nice", "great", "awesome", "good", "wow", "cool", "close",
         "almost", "so close", "barely", "just in time", "escape",
         "run", "chase", "fight", "attack", "defend", "dodge",
-        "police", "cops", "wanted", "stars", "level up",
+        "helipad", "getaway", "drift", "heist", "police", "cops", "wanted", "stars", "level up",
         # Hinglish
         "accha", "badhiya", "sahi", "chal", "bhag", "maar",
     ],
@@ -261,4 +261,4 @@ def get_hook_text_at_time(
             if ts.combined_score > best_score and ts.top_phrase:
                 best_score = ts.combined_score
                 best_phrase = ts.top_phrase
-    return best_phrase if best_phrase else "🔥 Highlight Moment"
+    return best_phrase

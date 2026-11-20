@@ -8,6 +8,8 @@ Yeh module do kaam karta hai:
 
 import subprocess
 import json
+import os
+from functools import lru_cache
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -75,56 +77,29 @@ def extract_audio(video_path: Path, output_path: Path | None = None) -> Path:
     return output_path
 
 
-def transcribe_audio(
-    audio_path: Path,
-    model_name: str = "base",
-    language: str | None = None,
-) -> list[TranscriptSegment]:
-    """
-    Whisper se audio transcribe karo with timestamps.
-
-    Args:
-        audio_path: Path to audio file (WAV recommended)
-        model_name: Whisper model (tiny/base/small/medium/large)
-        language: Language code (None = auto-detect)
-
-    Returns:
-        List of TranscriptSegment with start/end times and text
-    """
-    console.print(f"[bold blue]🎙 Transcribing with Whisper ({model_name})...[/]")
-
-    try:
+@lru_cache(maxsize=1)
+def _speech_model(name):
+    if os.getenv("CLIPPER_SPEECH_BACKEND") == "whisper":
         import whisper
+        return "whisper", whisper.load_model(name)
+    from faster_whisper import WhisperModel
+    return "faster", WhisperModel(os.getenv("CLIPPER_WHISPER_DIR") or name,
+                                  device="cpu", compute_type="int8", cpu_threads=2)
 
-        model = whisper.load_model(model_name)
 
-        # Transcribe options
-        options = {"verbose": False}
-        if language:
-            options["language"] = language
-
-        result = model.transcribe(str(audio_path), **options)
-
-        segments = []
-        detected_lang = result.get("language", "en")
-        for seg in result.get("segments", []):
-            segments.append(TranscriptSegment(
-                start=seg["start"],
-                end=seg["end"],
-                text=seg["text"].strip(),
-                language=detected_lang,
-                confidence=seg.get("avg_logprob", 0),
-            ))
-
-        console.print(
-            f"[bold green]✓ Transcribed {len(segments)} segments[/] "
-            f"(Language: {detected_lang})"
-        )
-        return segments
-
-    except ImportError:
-        console.print("[yellow]⚠ Whisper not installed. Using empty transcript.[/]")
-        return []
+def transcribe_audio(audio_path, model_name="base", language=None):
+    backend, model = _speech_model(model_name)
+    if backend == "whisper":
+        result = model.transcribe(str(audio_path), language=language, verbose=False)
+        return [TranscriptSegment(seg["start"], seg["end"], seg["text"].strip(), result["language"])
+                for seg in result["segments"] if seg.get("no_speech_prob", 0) < .6]
+    import wave
+    with wave.open(str(audio_path), "rb") as wav:
+        pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").astype(np.float32) / 32768
+    segments, info = model.transcribe(pcm, language=language, beam_size=1,
+                                      vad_filter=True, condition_on_previous_text=False)
+    return [TranscriptSegment(s.start, s.end, s.text.strip(), info.language) for s in segments
+            if s.no_speech_prob < .6 and s.text.strip()]
 
 
 def analyze_audio_energy(
@@ -151,62 +126,27 @@ def analyze_audio_energy(
     console.print(f"[bold blue]📊 Analyzing audio energy...[/]")
 
     try:
+        if os.getenv("CLIPPER_AUDIO_BACKEND") == "pcm":
+            raise ImportError
         import librosa
-
-        # Load audio
-        y, sr = librosa.load(str(audio_path), sr=22050)
-
-        # Compute RMS energy
-        rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
-
-        # Time points for each RMS value
-        times = librosa.frames_to_time(
-            np.arange(len(rms)),
-            sr=sr,
-            hop_length=hop_length
-        )
-
-        # Normalize to 0-1
-        rms_min = rms.min()
-        rms_max = rms.max()
-        if rms_max - rms_min > 0:
-            rms_normalized = (rms - rms_min) / (rms_max - rms_min)
-        else:
-            rms_normalized = np.zeros_like(rms)
-
-        # Find peaks above percentile threshold
-        threshold = np.percentile(rms_normalized, loudness_percentile)
-        from scipy.signal import find_peaks
-        peak_indices, _ = find_peaks(
-            rms_normalized,
-            height=threshold,
-            distance=int(30 * sr / hop_length),  # Min 30 sec between peaks
-            prominence=0.1,
-        )
-        peak_times = times[peak_indices].tolist()
-
-        features = AudioFeatures(
-            times=times,
-            energy=rms,
-            energy_normalized=rms_normalized,
-            peaks=peak_times,
-            sample_rate=sr,
-        )
-
-        console.print(
-            f"[bold green]✓ Audio analysis complete:[/] "
-            f"{len(peak_times)} loud peaks found"
-        )
-        return features
-
+        samples, sr = librosa.load(str(audio_path), sr=None)
+        rms = librosa.feature.rms(y=samples, frame_length=frame_length, hop_length=hop_length)[0]
     except ImportError:
-        console.print("[yellow]⚠ librosa not installed. Skipping audio analysis.[/]")
-        return AudioFeatures(
-            times=np.array([0.0]),
-            energy=np.array([0.0]),
-            energy_normalized=np.array([0.0]),
-            peaks=[],
-        )
+        import wave
+        with wave.open(str(audio_path), "rb") as wav:
+            sr = wav.getframerate()
+            pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").astype(np.float32)/32768
+        padded = np.pad(pcm, frame_length//2)
+        frames = np.lib.stride_tricks.sliding_window_view(padded, frame_length)[::hop_length]
+        rms = np.sqrt(np.mean(frames*frames, axis=1))
+    times = np.arange(len(rms)) * hop_length/sr
+    low, high = np.percentile(rms, [10, 95])
+    norm = np.clip((rms-low)/max(.018, high-low), 0, 1)
+    from scipy.signal import find_peaks
+    indexes, _ = find_peaks(norm, height=np.percentile(norm, loudness_percentile), prominence=.1,
+                             distance=max(1, int(3*sr/hop_length)))
+    return AudioFeatures(times, rms, norm, times[indexes].tolist(), sr)
+
 
 
 def get_transcript_at_time(

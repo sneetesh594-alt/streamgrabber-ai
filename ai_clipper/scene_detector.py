@@ -67,8 +67,8 @@ def detect_scenes(
         )
 
         # Detect scenes
-        scene_manager.detect_scenes(video, show_progress=True)
-        scene_list = scene_manager.get_scene_list()
+        scene_manager.detect_scenes(video, show_progress=False)
+        scene_list = scene_manager.get_scene_list(start_in_scene=True)
 
         scenes = []
         for i, (start, end) in enumerate(scene_list):
@@ -99,48 +99,21 @@ def _detect_scenes_ffmpeg(
     """
     import json
 
-    # FFmpeg scene detection threshold is 0-1 (normalize from PySceneDetect scale)
-    ff_threshold = min(threshold / 100.0, 0.9)
-
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-show_frames",
-        "-print_format", "json",
-        "-f", "lavfi",
-        f"movie={str(video_path)},select='gt(scene,{ff_threshold})'",
-    ]
-
-    # Simpler approach: use ffprobe to get duration and split uniformly as fallback
-    duration_cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        str(video_path)
-    ]
-
-    result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
-    data = json.loads(result.stdout)
-    total_duration = float(data["format"]["duration"])
-
-    # Create uniform scenes as a simple fallback
-    scenes = []
-    scene_len = max(min_scene_len_sec, 5.0)  # 5-second scenes
-    t = 0.0
-    idx = 0
-    while t < total_duration:
-        end = min(t + scene_len, total_duration)
-        scenes.append(Scene(
-            index=idx,
-            start_time=t,
-            end_time=end,
-            start_frame=int(t * 30),  # Approximate
-            end_frame=int(end * 30),
-        ))
-        t = end
-        idx += 1
-
-    console.print(f"[bold green]✓ Created {len(scenes)} uniform scenes (FFmpeg fallback)[/]")
-    return scenes
+    import re
+    from .downloader import get_video_info
+    info = get_video_info(video_path)
+    # FFmpeg emits each detected frame's actual presentation time via showinfo.
+    proc = subprocess.run(["ffmpeg", "-nostdin", "-i", str(video_path), "-an", "-vf",
+                           f"select='gt(scene,{min(threshold/100, .9)})',showinfo",
+                           "-f", "null", "-"], capture_output=True, text=True, check=True)
+    cuts = [0.]
+    for timestamp in re.findall(r"pts_time:([0-9.]+)", proc.stderr):
+        t = float(timestamp)
+        if t - cuts[-1] >= min_scene_len_sec and t < info.duration_sec:
+            cuts.append(t)
+    cuts.append(info.duration_sec)
+    return [Scene(i, a, b, int(a * info.fps), int(b * info.fps))
+            for i, (a, b) in enumerate(zip(cuts, cuts[1:]))]
 
 
 def get_scene_at_time(scenes: list[Scene], time_sec: float) -> Scene | None:

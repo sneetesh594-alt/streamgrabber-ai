@@ -10,6 +10,7 @@ Yeh module video frames ko analyze karta hai:
 import cv2
 import numpy as np
 from pathlib import Path
+from collections import deque
 from dataclasses import dataclass, field
 
 from rich.console import Console
@@ -27,6 +28,11 @@ class FrameScore:
     face_score: float = 0.0        # Face presence/size score (0-1)
     motion_score: float = 0.0      # Motion intensity score (0-1)
     combined_score: float = 0.0    # Weighted combination
+
+    gameplay: float | None = None
+    black: bool = False
+    fingerprint: int = 0
+    field_motion: float = 0.0
 
     # Face tracking info (for cropping)
     face_bbox: tuple[int, int, int, int] | None = None  # (x, y, w, h)
@@ -80,17 +86,8 @@ def analyze_visual(
         f"{duration:.1f}s | Sampling every {sample_interval} frames[/dim]"
     )
 
-    # Initialize CLIP if requested
-    clip_model = None
-    clip_preprocess = None
-    clip_tokenizer = None
-    clip_text_features = None
-    device = "cpu"
-
-    if use_clip:
-        clip_model, clip_preprocess, clip_tokenizer, clip_text_features, device = (
-            _init_clip(clip_prompts)
-        )
+    from .vision_models import classifier
+    classifier_fn = classifier() if use_clip else None
 
     # Initialize face detector
     face_cascade = None
@@ -102,6 +99,7 @@ def analyze_visual(
     # Analyze frames
     frame_scores = []
     prev_gray = None
+    short_history = deque(maxlen=max(1, round(video_fps * .25)))
     frame_idx = 0
 
     with Progress() as progress:
@@ -112,39 +110,34 @@ def analyze_visual(
             if not ret:
                 break
 
+            flow_gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (240, 135), interpolation=cv2.INTER_AREA)
             if frame_idx % sample_interval == 0:
                 time_sec = frame_idx / video_fps
                 score = FrameScore(time_sec=time_sec, frame_index=frame_idx)
 
-                # --- CLIP Scoring ---
-                if clip_model is not None:
-                    score.clip_score = _score_frame_clip(
-                        frame, clip_model, clip_preprocess, clip_text_features, device
-                    )
+                if classifier_fn is not None:
+                    score.gameplay, score.clip_score = classifier_fn(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
                 # --- Face Detection ---
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if face_cascade is not None:
                     score.face_score, score.face_bbox = _detect_face(frame, gray, face_cascade)
-
-                # --- Motion Detection ---
+                small = cv2.resize(gray, (128, 72), interpolation=cv2.INTER_AREA)
+                score.black = bool(np.percentile(small, 92) < 24 or small.std() < 3)
+                thumb = cv2.resize(small, (9, 8), interpolation=cv2.INTER_AREA)
+                score.fingerprint = int.from_bytes(np.packbits(thumb[:, 1:] > thumb[:, :-1]).tobytes(), "big")
+                if use_motion_detection and len(short_history) == short_history.maxlen:
+                    score.field_motion = _field_motion(short_history[0], flow_gray)
                 if use_motion_detection and prev_gray is not None:
-                    score.motion_score = _detect_motion(prev_gray, gray)
-
-                prev_gray = gray
-
-                # Combined score (simple average for now; weighted in scorer module)
-                scores = []
-                if use_clip:
-                    scores.append(score.clip_score)
-                if use_face_detection:
-                    scores.append(score.face_score)
-                if use_motion_detection:
-                    scores.append(score.motion_score)
-                score.combined_score = np.mean(scores) if scores else 0.0
+                    diff = cv2.absdiff(prev_gray, small)
+                    moving = float((diff > 12).mean())
+                    score.motion_score = min(1.0, moving * 1.8)
+                prev_gray = small
+                score.combined_score = .55 * score.motion_score + .45 * score.clip_score
 
                 frame_scores.append(score)
 
+            short_history.append(flow_gray)
             frame_idx += 1
             progress.update(task, advance=1)
 
@@ -157,80 +150,6 @@ def analyze_visual(
         fps=video_fps,
         total_frames=total_frames,
     )
-
-
-def _init_clip(prompts: list[str] | None = None):
-    """CLIP model initialize karo."""
-    try:
-        import open_clip
-        import torch
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        console.print(f"[dim]Loading CLIP model on {device}...[/dim]")
-
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="laion2b_s34b_b79k"
-        )
-        model = model.to(device).eval()
-        tokenizer = open_clip.get_tokenizer("ViT-B-32")
-
-        # Pre-compute text features for prompts
-        default_prompts = prompts or [
-            "an exciting action scene",
-            "a dramatic moment",
-            "an explosion or crash",
-            "a funny moment",
-            "a person celebrating",
-            "a car chase",
-            "a fight scene",
-            "a beautiful cinematic shot",
-        ]
-
-        with torch.no_grad():
-            text_tokens = tokenizer(default_prompts).to(device)
-            text_features = model.encode_text(text_tokens)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-
-        console.print(f"[dim]CLIP ready with {len(default_prompts)} prompts[/dim]")
-        return model, preprocess, tokenizer, text_features, device
-
-    except ImportError:
-        console.print("[yellow]⚠ open_clip not installed. CLIP scoring disabled.[/]")
-        return None, None, None, None, "cpu"
-
-
-def _score_frame_clip(frame, model, preprocess, text_features, device) -> float:
-    """
-    Ek frame ko CLIP se score karo.
-    Frame ko text prompts ke saath compare karke similarity score deta hai.
-    """
-    import torch
-    from PIL import Image
-
-    try:
-        # Convert OpenCV BGR to RGB PIL Image
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb)
-
-        # Preprocess and encode
-        with torch.no_grad():
-            image_input = preprocess(pil_image).unsqueeze(0).to(device)
-            image_features = model.encode_image(image_input)
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-
-            # Cosine similarity with all text prompts
-            similarity = (image_features @ text_features.T).squeeze(0)
-
-            # Take max similarity across prompts, normalize to 0-1
-            max_sim = similarity.max().item()
-            # CLIP similarities are typically 0.15-0.35, normalize
-            score = np.clip((max_sim - 0.15) / 0.25, 0.0, 1.0)
-
-        return float(score)
-
-    except Exception as e:
-        console.print(f"[dim red]CLIP scoring error: {e}[/dim red]")
-        return 0.0
 
 
 def _detect_face(frame, gray, face_cascade) -> tuple[float, tuple | None]:
@@ -257,27 +176,19 @@ def _detect_face(frame, gray, face_cascade) -> tuple[float, tuple | None]:
     return float(score), (int(x), int(y), int(w), int(h))
 
 
-def _detect_motion(prev_gray, curr_gray) -> float:
-    """
-    Do frames ke beech motion detect karo using optical flow magnitude.
-    High motion = action scene.
-    """
-    try:
-        flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, curr_gray,
-            None,
-            pyr_scale=0.5, levels=3, winsize=15,
-            iterations=3, poly_n=5, poly_sigma=1.2, flags=0
-        )
-        magnitude = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
-        mean_motion = np.mean(magnitude)
-
-        # Normalize (typical values are 0-20, high action can be 50+)
-        score = np.clip(mean_motion / 15.0, 0.0, 1.0)
-        return float(score)
-
-    except Exception:
-        return 0.0
+def _field_motion(previous, current):
+    """Fraction of tracked features moving across the field in a quarter second."""
+    points = cv2.goodFeaturesToTrack(previous, 120, .02, 5)
+    if points is None or len(points) < 8:
+        return 0.
+    moved, ok, _ = cv2.calcOpticalFlowPyrLK(previous, current, points, None)
+    if moved is None:
+        return 0.
+    mask = ok.ravel().astype(bool)
+    if mask.sum() < 8:
+        return 0.
+    displacement = np.linalg.norm((moved[mask] - points[mask]).reshape(-1, 2), axis=1)
+    return float((displacement > 1.5).mean())
 
 
 def get_visual_score_at_time(analysis: VisualAnalysis, time_sec: float) -> float:

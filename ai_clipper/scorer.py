@@ -175,10 +175,7 @@ def find_highlights(
     )
 
     if len(peak_indices) == 0:
-        # Fallback: take top N scoring points
-        console.print("[yellow]⚠ No clear peaks found, taking top scoring moments[/]")
-        top_indices = np.argsort(scores)[-max_clips:][::-1]
-        peak_indices = top_indices
+        return []
 
     # Create highlight candidates
     highlights = []
