@@ -1,0 +1,1 @@
+{"name":"streamgrabber-studio-site","private":true,"type":"module","scripts":{"dev":"node website/build.mjs && node website/preview.mjs","build":"node website/build.mjs"}}
