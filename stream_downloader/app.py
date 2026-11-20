@@ -88,9 +88,13 @@ class AIShortsRequest(BaseModel):
     creator_tag: Optional[str] = None  # Optional @Username override
 
 
-NODE_PATH = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-if not Path(NODE_PATH).exists():
-    NODE_PATH = shutil.which("node")
+def find_node_path() -> Optional[str]:
+    for cand in [shutil.which("node"), shutil.which("nodejs"), "/usr/bin/node", "/usr/bin/nodejs", "/usr/local/bin/node", r"C:\Program Files\nodejs\node.exe"]:
+        if cand and Path(cand).exists():
+            return str(cand)
+    return None
+
+NODE_PATH = find_node_path()
 
 
 def normalize_url(url: str) -> str:
