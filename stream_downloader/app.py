@@ -147,12 +147,16 @@ def get_ydl_base_opts(for_url: Optional[str] = None) -> Dict[str, Any]:
     if check_ffmpeg_installed():
         opts["ffmpeg_location"] = FFMPEG_EXE
 
-    # Auto-load cookies.txt if provided
-    cookie_file = BASE_DIR / "cookies.txt"
-    if not cookie_file.exists():
-        cookie_file = BASE_DIR.parent / "cookies.txt"
-    if cookie_file.exists():
-        opts["cookiefile"] = str(cookie_file)
+    # Auto-load cookies.txt if provided (local directory or Render /etc/secrets)
+    cookie_candidates = [
+        BASE_DIR / "cookies.txt",
+        BASE_DIR.parent / "cookies.txt",
+        Path("/etc/secrets/cookies.txt"),
+    ]
+    for cpath in cookie_candidates:
+        if cpath.exists():
+            opts["cookiefile"] = str(cpath)
+            break
 
     return opts
 
