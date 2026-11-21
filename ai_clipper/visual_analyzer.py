@@ -33,6 +33,7 @@ class FrameScore:
     black: bool = False
     fingerprint: int = 0
     field_motion: float = 0.0
+    menu_probability: float = 0.0
 
     # Face tracking info (for cropping)
     face_bbox: tuple[int, int, int, int] | None = None  # (x, y, w, h)
@@ -136,7 +137,9 @@ def analyze_visual(
                         classifier_fn = classifier()
                         model_checked = True
                     if classifier_fn is not None:
-                        score.gameplay, score.clip_score = classifier_fn(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                        measured = classifier_fn(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                        score.gameplay, score.clip_score = measured[:2]
+                        score.menu_probability = measured[2] if len(measured) > 2 else 0.
                 prev_gray = small
                 score.combined_score = .55 * score.motion_score + .45 * score.clip_score
 

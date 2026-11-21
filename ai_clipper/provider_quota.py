@@ -83,7 +83,7 @@ def reset_seconds(raw, fallback):
     return max(1,sum(float(n)*{"ms":.001,"s":1,"m":60,"h":3600,"d":86400}[u] for n,u in matches))
 
 
-def observe_groq(headers, status):
+def observe_groq(headers, status, next_tokens=0):
     waits=[]
     for kind,fallback in (("requests",86400),("tokens",60)):
         try:
@@ -91,7 +91,8 @@ def observe_groq(headers, status):
             left=int(headers.get("x-ratelimit-remaining-"+kind))
         except (ValueError,TypeError):
             continue
-        if limit>0 and left<=math.ceil(limit*.01):
+        projected = next_tokens if kind == "tokens" else 0
+        if limit>0 and left-projected<=math.ceil(limit*.01):
             waits.append(reset_seconds(headers.get("x-ratelimit-reset-"+kind),fallback))
     if status==429:
         waits.append(reset_seconds(headers.get("retry-after"),60))

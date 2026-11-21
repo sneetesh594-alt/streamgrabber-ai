@@ -15,6 +15,11 @@ LABELS = (
     "a video game pause menu, settings, loading screen, lobby, inventory or map",
     "a black screen, a title card, scrolling text or a video editor",
     "a real photograph, a live action movie, or a person talking on a webcam",
+    "a full-screen video game map of roads with icons, location markers and a legend",
+    "a weapon selection wheel, weapon inventory or a video game shop menu",
+    "a game loading screen or starting soon stream screen",
+    "a player walking calmly to a parked car or standing outside a shop in a video game",
+    "a video game character browsing a shop or preparing equipment without action",
 )
 REPO = "Xenova/clip-vit-base-patch32"
 REV = "6b7c523703ae26e39be4b03774966f8571c7f523"
@@ -26,7 +31,9 @@ def _probabilities(image, text):
     sims = 70 * (text @ (embedding / max(np.linalg.norm(embedding), 1e-9)))
     def probability(positive, negative):
         return float(1 / (1 + np.exp(np.clip(max(negative) - max(positive), -50, 50))))
-    return probability(sims[:5], sims[5:]), probability(sims[1:4], sims[4:])
+    menus = np.concatenate((sims[5:7], sims[8:11]))
+    return (probability(sims[:5], sims[5:]), probability(sims[1:4], sims[4:]),
+            probability(menus, np.concatenate((sims[:5], sims[7:8], sims[11:]))))
 
 
 def _onnx_model():

@@ -39,3 +39,13 @@ def test_video_identity_is_reported_before_media_failure(tmp_path,monkeypatch):
     assert result.source_error=="forbidden"
     assert info[0]["title"]=="Actual supplied video"
     assert info[0]["channel"]=="Actual creator"
+
+
+def test_map_frames_veto_a_candidate(tmp_path):
+    from ai_clipper.visual_analyzer import FrameScore, VisualAnalysis
+    from ai_clipper.moments import candidates
+    from ai_clipper.config import ClipperConfig
+    frames = [FrameScore(t,t,clip_score=.95,motion_score=.9,gameplay=.95,field_motion=.95,
+                         menu_probability=.9 if 10<=t<20 else 0.) for t in range(30)]
+    assert candidates(tmp_path/"video.mp4",0,30,VisualAnalysis(frame_scores=frames),
+                      None,[],[],ClipperConfig(clip_duration_target_sec=30)) == []

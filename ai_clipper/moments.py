@@ -48,6 +48,8 @@ def candidates(proxy, offset, duration, visual, energy, speech, scenes, config):
         window = [f for f in frames if start <= f.time_sec < end]
         if not window:
             continue
+        if np.mean([f.menu_probability >= .6 for f in window]) > .15:
+            continue
         motion = np.array([f.motion_score for f in window])
         if np.mean([f.black for f in window]) > .18 or (motion > .13).mean() < .48:
             continue
@@ -92,13 +94,13 @@ def duplicate(moment, selected):
     return False
 
 
-def verify(moment, cloud, config):
+def verify(moment, cloud, config, evidence_source="Gemini · decoded video and audio"):
     # Cloud verdicts and local CLIP probabilities refer to the same measured window.
     if cloud is not None:
         if cloud <= 0:
             return False
         game = cloud
-        moment.evidence = "Gemini · decoded video and audio"
+        moment.evidence = evidence_source
     else:
         if moment.gameplay < .58 or moment.action < .43:
             return False

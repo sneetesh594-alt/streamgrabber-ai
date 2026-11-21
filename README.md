@@ -74,3 +74,7 @@ Extractor timeouts terminate the extractor and its FFmpeg children. FFmpeg secti
 An optional worker can poll the website over outbound HTTPS. Configure `STUDIO_WORKER_SHA256` on the website and the matching `STUDIO_WORKER_TOKEN` plus `STUDIO_GATEWAY` on the worker, then run `python -m ai_clipper.private_worker`. Use a separate token from the browser invite. Leave these settings unset when processing on the website host. The worker must remain running and independently have access to the video, FFmpeg and the required models. This temporary workspace provides no uptime guarantee.
 
 Render's ephemeral filesystem can lose jobs and checkpoints on restart or deployment. Durable recovery across machine replacement requires persistent storage.
+
+Map and weapon-menu frames have explicit rejection labels. A window with more than 15% strongly identified menu frames is rejected. Available Groq vision models additionally review three ordered candidate frames with the actual transcript, using the same quota reserve as speech requests and a cached verdict. Only model IDs advertised by the provider are requested. A provider failure falls back to local CLIP evidence. The low-memory renderer applies output FPS before scaling and uses the ultrafast H.264 preset to bound CPU cost.
+
+The web form defaults to Quick scan and stops after finding the requested verified clips. Its reported scanned ranges show exactly what was inspected. Full timeline remains available for complete coverage. The CLI configuration keeps its existing full-scan default.

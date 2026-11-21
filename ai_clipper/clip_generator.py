@@ -227,9 +227,9 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
             cw, ch = min(sw, int(sh*w/h)), min(sh, int(sw*h/w))
             cx = face_bbox[0] + face_bbox[2]/2 if face_bbox else sw/2
             x = max(0, min(sw-cw, int(cx-cw/2)))
-            graph = f"[0:v]crop={cw}:{ch}:{x}:(ih-oh)/2,scale={w}:{h},setsar=1[base]"
+            graph = f"[0:v]fps={output_fps},crop={cw}:{ch}:{x}:(ih-oh)/2,scale={w}:{h},setsar=1[base]"
         else:
-            graph = (f"[0:v]split=2[back][front];[back]scale={w//4}:{h//4}:"
+            graph = (f"[0:v]fps={output_fps},split=2[back][front];[back]scale={w//4}:{h//4}:"
                      f"force_original_aspect_ratio=increase,crop={w//4}:{h//4},"
                      f"boxblur=12:2,scale={w}:{h},eq=brightness=-0.10[bg];"
                      f"[front]scale={w}:{h}:force_original_aspect_ratio=decrease:"
@@ -266,13 +266,13 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
             shutil.copyfile(srt_path, work/"captions.srt")
             layers.append(f"subtitles=captions.srt:force_style='FontName={family},Alignment=2,"
                           f"FontSize={max(10,round(subtitle_font_size*288/1080))},MarginV=28,Outline=2'")
-        layers += [f"fps={output_fps}", "format=yuv420p"]
+        layers += ["format=yuv420p"]
         graph += (";[branded]" if logo else ";[base]") + ",".join(layers) + "[v]"
         target = Path(output_path).resolve()
         temp = target.with_suffix(".part.mp4")
         from .runtime_memory import low_memory
         bounded = low_memory()
-        encoder = ["-threads", "1" if bounded else "2", "-preset", "veryfast"]
+        encoder = ["-threads", "1" if bounded else "2", "-preset", "ultrafast" if bounded else "veryfast"]
         if bounded:
             encoder += ["-tune", "zerolatency", "-x264-params", "ref=1:rc-lookahead=0"]
         try:

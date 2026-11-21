@@ -58,7 +58,7 @@ function secondsField(id) {
 }
 el('scan-mode').onchange = () => {
   el('scan-hint').textContent = el('scan-mode').value === 'quick'
-    ? 'Sample across the timeline, including the first and last minute.'
+    ? 'Sample the timeline and stop when the requested clips qualify.'
     : 'Inspect every section of the recording or available live DVR.';
 };
 async function api(path, options = {}) {
@@ -190,6 +190,7 @@ async function watch(id, label) {
       evidence.textContent=analysis ? [
         'Vision '+analysis.vision,
         'Speech '+analysis.speech,
+        analysis.cloud_vision==='Groq vision' ? 'Groq vision review' : '',
         (analysis.frames_analyzed||0)+' frames analyzed',
         (analysis.speech_segments||0)+' transcript segments',
         (analysis.candidate_windows||0)+' action windows',

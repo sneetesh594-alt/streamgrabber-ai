@@ -44,7 +44,7 @@ class Options(BaseModel):
     creator_tag: str = Field(default="", max_length=32)
     overlay_badge: str = Field(default="GTA VI", max_length=20)
     frame_style: Literal["blur_bg", "fill_crop"] = "blur_bg"
-    scan_mode: Literal["full","quick"] = "full"
+    scan_mode: Literal["full","quick"] = "quick"
     range_start: float = Field(0, ge=0, allow_inf_nan=False)
     range_end: float | None = Field(None, gt=0, allow_inf_nan=False)
     whisper_model: Literal["tiny", "base", "small", "medium", "large"] | None = None
@@ -289,7 +289,7 @@ async def start_upload(background_tasks: BackgroundTasks, url: str = Form(""), f
                        creator_tag: str=Form("", max_length=32), overlay_badge: str=Form("GTA VI", max_length=20),
                        subtitle_font: Literal["Sans","Serif","Mono"]=Form("Sans"),
                        frame_style: Literal["blur_bg","fill_crop"]=Form("blur_bg"),
-                       scan_mode: Literal["full","quick"]=Form("full"), range_start: float=Form(0,ge=0,allow_inf_nan=False),
+                       scan_mode: Literal["full","quick"]=Form("quick"), range_start: float=Form(0,ge=0,allow_inf_nan=False),
                        range_end: float | None=Form(None,gt=0,allow_inf_nan=False),
                        whisper_model: Literal["tiny","base","small","medium","large"] | None=Form(None)):
     opts = Options(url=url, num_clips=max_clips, clip_duration=clip_duration, quality=quality,

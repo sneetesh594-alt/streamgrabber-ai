@@ -38,7 +38,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
     from .config import config as defaults
     from .downloader import get_video_info
     from .sources import SourceAccessError, metadata, inspection_ranges, fetch_section, make_proxy
-    from . import checkpoints, groq_speech
+    from . import checkpoints, groq_speech, groq_review
     from .provider_quota import wait_for_reset
     from datetime import datetime, timezone
     from .runtime_memory import low_memory, release_models
@@ -60,7 +60,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
     report = progress or (lambda n, msg: console.print(f"[cyan]{n}%[/] {msg}"))
     analysis = {"sections_read": 0, "frames_analyzed": 0, "candidate_windows": 0,
                 "verified_windows": 0, "speech_segments": 0, "vision": "pending",
-                "speech": "pending"}
+                "speech": "pending", "cloud_vision": "not used"}
     result.metadata["analysis"] = analysis
     def details(**changes):
         result.metadata.update(changes)
@@ -112,7 +112,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
             details()
             cloud_active = os.getenv("GEMINI_REVIEW_ENABLED","").lower()=="true"
             if not dvr:
-                saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v2"])
+                saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v3"])
             else:
                 warnings.append("Inspected the completed segments the provider exposed when this job started.")
             report(9, f"Inspecting {len(coverage)} source sections")
@@ -213,17 +213,30 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
                     analysis["speech"] = "no audio track"
                 details()
                 verified = []
+                reviewed = 0
                 for moment in rows:
                     if moment.score < config.min_highlight_score:
                         continue
                     if len(verified)>=config.max_clips or duplicate(moment,verified):
                         continue
+                    if reviewed >= 3 and groq_review._keys():
+                        break
                     verdict = None
-                    if cloud_active and (len(selected)<config.max_clips or moment.score>selected[-1].score):
+                    cloud_source = "Gemini · decoded video and audio"
+                    if (reviewed < 3 and groq_review._keys() and
+                            (len(selected)<config.max_clips or moment.score>selected[-1].score)):
+                        verdict = groq_review.review(proxy,moment.start-start,moment.end-moment.start,
+                            " ".join(seg.text for seg in moment.speech),pause,(saved_scans or temp)/"vision-reviews")
+                        reviewed += 1
+                        if verdict is not None:
+                            cloud_source = "Groq vision · source frames and transcript"
+                            analysis["cloud_vision"] = "Groq vision"
+                            details()
+                    if verdict is None and cloud_active and (len(selected)<config.max_clips or moment.score>selected[-1].score):
                         preview = temp/"review.mp4"
                         make_proxy(proxy,preview,moment.start-start,moment.end-moment.start,224)
                         verdict = review(preview," ".join(seg.text for seg in moment.speech),pause,(saved_scans or temp)/"reviews")
-                    if verify(moment,verdict,config):
+                    if verify(moment,verdict,config,evidence_source=cloud_source):
                         analysis["verified_windows"] += 1
                         verified.append(moment)
                         retain(moment)
@@ -236,6 +249,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
                         if old_start not in keep:
                             retained_sources.pop(old_start).unlink(missing_ok=True)
                 warnings.extend(batch_warnings)
+                if config.scan_mode=="quick" and len(selected)>=config.max_clips:
+                    warnings.append("Quick scan stopped after finding the requested verified clips. Full timeline mode inspects every section.")
+                    break
             if not covered:
                 raise ValueError("The video host did not return any inspectable sections.")
             if (not selected and analysis["vision"] == "unavailable" and
