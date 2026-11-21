@@ -88,11 +88,21 @@ def _unbilled(key):
     return bill.get("billingEnabled") is False
 
 
-def review(media, transcript):
+def guard(report):
+    if report is None:
+        return
+    from .provider_quota import gemini_deadline, stop_until, wait_for_reset
+    state = usage()
+    if state["quota_stopped"] or (state["requests"] and state["daily_limit"]-state["requests"] <= math.ceil(state["daily_limit"]*.01)):
+        stop_until("Gemini",gemini_deadline())
+    wait_for_reset(report)
+
+
+def review(media, transcript, report=None, cache=None):
     """None means use local evidence. A definite veto from either verified reviewer wins."""
     if os.getenv("GEMINI_REVIEW_ENABLED", "").lower() != "true" or not any(os.getenv(s) for s in SLOTS):
         return None
-    if media.stat().st_size > 8_000_000:
+    if (report is not None and _limit() <= 1) or media.stat().st_size > 8_000_000:
         return None
     encoded = base64.b64encode(media.read_bytes()).decode("ascii")
     payload = {"contents": [{"parts": [{"text": PROMPT}, {"text": "Whisper transcript: " + transcript[:4000]},
@@ -101,11 +111,24 @@ def review(media, transcript):
     verdicts = []
     day = _day()
     seen = set()
-    for slot in SLOTS:
+    slots=list(SLOTS)
+    while slots:
+        slot=slots.pop(0)
         key = os.getenv(slot)
         if not key or key in seen:
             continue
         seen.add(key)
+        entry=None
+        if cache is not None:
+            import hashlib
+            cache.mkdir(parents=True,exist_ok=True)
+            digest=hashlib.sha256((MODEL+slot+PROMPT+transcript+encoded).encode()).hexdigest()
+            entry=cache/(digest+".json")
+            if entry.is_file():
+                verdicts.append(float(entry.read_text()))
+                continue
+        guard(report)
+        day = _day()
         state = usage()
         if state["quota_stopped"] or state["requests"] >= state["daily_limit"]:
             break
@@ -127,8 +150,22 @@ def review(media, transcript):
             category, confidence = result["category"], float(result["confidence"])
             if category not in REJECT | {"action"} or not math.isfinite(confidence) or not 0 <= confidence <= 1:
                 continue
-            verdicts.append(confidence if category == "action" and confidence >= .72 else 0.0)
+            value=confidence if category=="action" and confidence>=.72 else 0.
+            verdicts.append(value)
+            if entry is not None:
+                tmp=entry.with_suffix(".tmp")
+                tmp.write_text(json.dumps(value))
+                tmp.replace(entry)
         except urllib.error.HTTPError as exc:
+            if exc.code==429 and report is not None:
+                from .provider_quota import stop_until, wait_for_reset, reset_seconds, gemini_deadline
+                import time
+                delay=reset_seconds(exc.headers.get("retry-after"),max(1,gemini_deadline()-time.time()))
+                stop_until("Gemini",time.time()+delay)
+                wait_for_reset(report)
+                slots.insert(0,slot)
+                seen.discard(key)
+                continue
             if exc.code in (402, 429):
                 with closing(_db()) as db:
                     db.execute("INSERT OR IGNORE INTO usage(day) VALUES (?)", (day,))
@@ -137,4 +174,5 @@ def review(media, transcript):
         except Exception:
             # Provider/library errors can contain URLs with credentials. Never log or persist them.
             continue
+    guard(report)
     return min(verdicts) if verdicts else None

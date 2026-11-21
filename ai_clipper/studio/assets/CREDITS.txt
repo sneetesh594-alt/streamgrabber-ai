@@ -6,3 +6,4 @@ Changes: selected an observed highlight, added a vertical blurred background and
 Grand Theft Auto and related game assets belong to their respective owners.
 Night-drive artwork is an original generated illustration for the layout preview.
 Barlow Condensed and DM Sans use the SIL Open Font License; see the bundled license texts.
+Official Grand Theft Auto VI overlay logo: Rockstar Games, https://www.rockstargames.com/VI/_next/static/media/poster_logo.0m-7c805zusl7.png . Transparent margins trimmed and the asset resized. Rockstar branding belongs to its owner.

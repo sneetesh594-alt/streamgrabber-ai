@@ -1296,3 +1296,5 @@ dialog::backdrop {
 .scan-heading span,.scan-controls small,.scan-controls p {color:var(--soft);font-size:.8rem}
 .scan-controls .select {max-width:100%;margin:7px 0}
 .scan-controls small {display:block;margin-top:6px}
+
+.font-choice{display:flex;align-items:center;justify-content:space-between;margin:14px 0;color:var(--text);font-size:.9rem}.font-choice select{padding:8px 16px;color:inherit;background:#202026;border:1px solid #43434b;border-radius:6px}.credit-strip #mock-logo{width:16%;height:auto;object-fit:contain}.transcript-text{white-space:pre-wrap;max-height:20rem;overflow:auto;font:inherit}#alerts{margin-top:10px}

@@ -37,7 +37,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
     from .config import config as defaults
     from .downloader import get_video_info
     from .sources import metadata, inspection_ranges, fetch_section, make_proxy
-    from . import checkpoints
+    from . import checkpoints, groq_speech
+    from .provider_quota import wait_for_reset
+    from datetime import datetime, timezone
     from .runtime_memory import low_memory, release_models
     from .live_dvr import open_dvr
     from .audio_analyzer import extract_audio, transcribe_audio, analyze_audio_energy
@@ -110,6 +112,10 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
             for index, (start, end) in enumerate(coverage):
                 progress_n = 10 + round(65*index/len(coverage))
                 checkpoint = saved_scans/f"{index:05}.json" if saved_scans else None
+                def pause(provider, deadline):
+                    reset = datetime.fromtimestamp(deadline,timezone.utc).isoformat(timespec="seconds")
+                    report(progress_n, f"Paused for {provider} quota | {reset} | section {index+1} of {len(coverage)}")
+                wait_for_reset(pause)
                 if checkpoint and checkpoint.is_file():
                     previous, transcript, bounds, messages = checkpoints.load(checkpoint)
                     for moment in previous:
@@ -167,7 +173,10 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     energy = analyze_audio_energy(audio, config.audio_hop_length, config.audio_frame_length)
                     report(progress_n+1, f"Transcribing audio in section {index+1}")
                     try:
-                        speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
+                        cache = (saved_scans or temp)/"speech"
+                        speech = groq_speech.transcribe(audio, config.whisper_language, cache, pause)
+                        if speech is None:
+                            speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
                     except (OSError, RuntimeError, ImportError, ValueError):
                         batch_warnings.append("Speech model unavailable; captions could not be generated for this section.")
                     finally:
@@ -187,7 +196,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     if cloud_active and (len(selected)<config.max_clips or moment.score>selected[-1].score):
                         preview = temp/"review.mp4"
                         make_proxy(proxy,preview,moment.start-start,moment.end-moment.start,224)
-                        verdict = review(preview," ".join(seg.text for seg in moment.speech))
+                        verdict = review(preview," ".join(seg.text for seg in moment.speech),pause,(saved_scans or temp)/"reviews")
                     if verify(moment,verdict,config):
                         verified.append(moment)
                         retain(moment)
@@ -234,7 +243,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                 _generate_single_clip(original, path, cut_start, cut_start+moment.end-moment.start, w,h,
                     config.output_fps, box, subs, moment.hook, config.subtitle_font_size, config.subtitle_font_color,
                     config.hook_font_size, config.hook_font_color, config.enable_overlay, config.creator_tag,
-                    config.overlay_badge, config.frame_style)
+                    config.overlay_badge, config.frame_style, config.subtitle_font)
                 _generate_thumbnail(original, cut_start+moment.peak-moment.start, thumb)
                 clip = GeneratedClip(idx, path, thumb, timeline_offset+moment.start, timeline_offset+moment.end, moment.end-moment.start,
                     moment.score, _generate_title(title, moment.hook, idx), moment.hook,

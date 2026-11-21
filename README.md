@@ -54,3 +54,11 @@ The reviewers receive the short decoded candidate video with its audio and avail
 Use only recordings you own or have permission to edit and share. Subtitles, reframing and badges do not change the source rights. The playable GTA V sample is credited to Xusder, CC BY-SA 4.0. [Sample credit and license](ai_clipper/studio/assets/CREDITS.txt)
 
 [Deployment guide](CLOUD_DEPLOY_GUIDE.md) · [Test results and reproduction](docs/VERIFICATION.md)
+
+## Transcripts, fonts and six provider slots
+
+Each completed job has **Read transcript** with source times for the inspected gameplay. A clip with speech has downloadable SRT subtitles. Choose Sans, Serif or Mono for the burned-in captions and hook. With overlays enabled, the GTA VI badge uses the official Rockstar mark. Enter another game name to use a text badge.
+
+Two Google Gemini slots review candidate clips. Four separate Groq slots (`GROQ_API_KEY_1` through `GROQ_API_KEY_4`) handle audio transcription using Whisper Large v3 Turbo. Put newly issued keys in the backend secret manager. Set `GROQ_CONFIRMED_FREE_PLAN=true` only after confirming the linked organization is on the Free plan. Groq does not advertise billing status in its transcription response. Missing keys, inactive cloud settings and ordinary service failures use the local speech model. All Groq slots share one rate budget. Distinct audio sections are assigned by fingerprint and successful transcriptions are cached per job.
+
+The worker holds the running operation on reaching a 1% reserve (rounded up to a whole request). It uses Groq's remaining/reset headers and a conservative local rolling ledger for audio and requests. Gemini uses the configured application budget, Pacific midnight reset and provider throttling responses. The live dashboard shows the section and reset time. **Enable quota alerts** opts into device notifications where supported while Studio remains open. The worker resumes the same operation after reset. Saved recordings can restore their section and cached cloud outputs after a worker restart when job storage persists. Live DVR snapshots require a running worker. Render Free can discard local job state on spin-down. [Groq limits](https://console.groq.com/docs/rate-limits) · [Render free hosting](https://render.com/docs/free)

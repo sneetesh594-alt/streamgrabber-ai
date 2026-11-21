@@ -95,6 +95,7 @@ class ClipperConfig(BaseSettings):
         description="Default hashtags for generated clips"
     )
 
+    subtitle_font: Literal["Sans", "Serif", "Mono"] = "Sans"
     enable_overlay: bool = True
     creator_tag: str = ""
     overlay_badge: str = "GTA VI"

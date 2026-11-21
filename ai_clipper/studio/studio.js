@@ -96,7 +96,9 @@ function preview() {
   const overlay = el('overlay').checked;
   const badge = el('badge').value.trim();
   const tag = el('tag').value.trim();
-  el('mock-badge').hidden = !overlay || !badge;
+  const logo = ['GTA VI','GTA6','GTA 6'].includes(badge.toUpperCase());
+  el('mock-logo').hidden = !overlay || !logo;
+  el('mock-badge').hidden = !overlay || !badge || logo;
   el('mock-badge').textContent = badge;
   el('mock-tag').hidden = !overlay || !tag;
   el('mock-tag').textContent = tag;
@@ -159,7 +161,9 @@ function videoCard(c,jobId) {
       if (msg) link.textContent = msg;
     } catch (e) { source.textContent=e.message; }
   };
-  links.append(dl,link);box.append(video,title,stats,source,links);
+  links.append(dl,link);
+  if(c.captions){const srt=element('a','Download subtitles','secondary');srt.href=c.srt_url+'?download=1';links.append(srt);}
+  box.append(video,title,stats,source,links);
   return box;
 }
 async function watch(id, label) {
@@ -182,6 +186,14 @@ async function watch(id, label) {
       const origin = extent ? 'Available '+time(extent[0])+' – '+time(extent[1])+' from '+job.timeline_origin+'.' : '';
       const coverage = job.scanned_ranges?.length ? 'Inspected '+job.scanned_ranges.length+' sections.' : '';
       el('job-status').textContent = [note,origin,coverage,...(job.warnings || [])].filter(Boolean).join(' ');
+      if(job.status==='paused'){
+        const line=job.stage+'. Resumes after '+new Date(job.reset_at).toLocaleString();
+        el('job-status').textContent=line;
+        if('Notification' in window && Notification.permission==='granted' && notified.get(id)!==job.reset_at){
+          notified.set(id,job.reset_at);
+          try{new Notification('Clip Studio paused',{body:line,tag:id});}catch{}
+        }
+      }
       if (job.status==='error' && job.resumable) {
         const resume=element('button','Resume scan','secondary');
         resume.onclick=async()=>{try{resume.disabled=true;await api('/api/studio/jobs/'+id+'/resume',{method:'POST'});watch(id,label);}
@@ -189,6 +201,11 @@ async function watch(id, label) {
         el('job-results').replaceChildren(resume);
       }
       if (job.status === 'error' || job.status === 'completed') {
+        if(job.transcript_url){
+          const btn=element('button','Read transcript','secondary');
+          btn.onclick=async()=>{try{const rows=await api(job.transcript_url);const text=element('pre',rows.map(s=>time(s.start)+'  '+s.text).join('\n')||'No speech was detected in the inspected gameplay.');text.className='transcript-text';btn.replaceWith(text);}catch(e){btn.textContent=e.message;}};
+          el('job-results').append(btn);
+        }
         for (const c of job.clips || []) el('job-results').append(videoCard(c,id));
         if (location.hash === '#library') library();
         return;
@@ -216,7 +233,7 @@ el('clip-form').onsubmit = async event => {
     note.textContent = 'Choose a video recording.';return;
   }
   const opts = {num_clips:count, clip_duration:Number(el('duration').value),quality:el('quality').value,
-    enable_overlay:el('overlay').checked,creator_tag:el('tag').value.trim(),overlay_badge:el('badge').value.trim()};
+    subtitle_font:el('font').value,enable_overlay:el('overlay').checked,creator_tag:el('tag').value.trim(),overlay_badge:el('badge').value.trim()};
   try {
     opts.scan_mode=el('scan-mode').value;
     opts.range_start=secondsField('range-start') || 0;
@@ -279,11 +296,16 @@ el('usage-open').onclick = async () => {
   try {
     const u=await api('/api/studio/usage');
     const grid=element('div',null,'usage-grid');
-    for(const [num,label] of [[u.requests+' / '+u.daily_limit,'Requests today'],[u.tokens,'Reported tokens'],['$'+Number(u.estimated_cost_usd).toFixed(2),'API spend'],[u.configured_slots+' / 2','Keys configured']]){
+    for(const [num,label] of [[u.requests+' / '+u.daily_limit,'Gemini requests today'],[u.tokens,'Reported tokens'],['$'+Number(u.estimated_cost_usd).toFixed(2),'API spend'],[u.configured_slots+' / 2','Gemini keys'],[(u.groq_slots||0)+' / 4','Groq keys'],[u.groq_requests||0,'Groq requests · 24h'],[u.groq_audio_seconds||0,'Audio seconds · 24h']]){
       const cell=element('div');cell.append(element('b',String(num)),element('small',label));grid.append(cell);
     }
-    panel.replaceChildren(grid,element('p',u.quota_stopped?'Daily quota reached. Jobs use local analysis.':'Cloud review requires a verified, unbilled Google project. Local analysis is available independently.'));
+    panel.replaceChildren(grid,element('p',u.paused?'Quota reserve reached. Processing will resume after reset.':'Cloud review requires a verified, unbilled Google project. Local analysis is available independently.'));
   } catch(e){panel.replaceChildren(element('p',e.message));}
+};
+const notified=new Map();
+el('alerts').onclick=async()=>{
+  const btn=el('alerts');
+  try{btn.textContent='Notification' in window && await Notification.requestPermission()==='granted'?'Quota alerts enabled':'Quota alerts appear in Current job';}catch{btn.textContent='Quota alerts appear in Current job';}
 };
 el('try-sample').onclick=async()=>{
   const panel=el('sample-content');panel.replaceChildren(element('p','Loading sample…'));el('sample-dialog').showModal();
@@ -305,5 +327,5 @@ document.querySelectorAll('dialog').forEach(dialog=>{
 });
 window.addEventListener('hashchange',navigate);
 icons();setCount(0);navigate();preview();
-const ongoing=readHistory().find(j=>['queued','running','starting'].includes(j.state));
+const ongoing=readHistory().find(j=>['queued','paused','running','starting'].includes(j.state));
 if(ongoing) watch(ongoing.id,ongoing.name);

@@ -8,7 +8,7 @@ import secrets
 import shutil
 import uuid
 from pathlib import Path
-from threading import BoundedSemaphore, RLock
+from threading import BoundedSemaphore, RLock, Thread
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -35,6 +35,7 @@ class Options(BaseModel):
     num_clips: int = Field(default=3, ge=1, le=10)
     clip_duration: int = Field(default=30, ge=20, le=45)
     quality: Literal["720p", "1080p"] = "1080p"
+    subtitle_font: Literal["Sans","Serif","Mono"] = "Sans"
     enable_overlay: bool = True
     creator_tag: str = Field(default="", max_length=32)
     overlay_badge: str = Field(default="GTA VI", max_length=20)
@@ -72,7 +73,7 @@ def read_job(job_id):
     if not file.is_file():
         raise HTTPException(404, "Job not found")
     item = json.loads(file.read_text())
-    if item.pop("session", "") != SESSION and item["status"] in ("running", "queued"):
+    if item.pop("session", "") != SESSION and item["status"] in ("running", "queued", "paused"):
         item.update(status="error", error="The processing server restarted. Resume a saved recording scan or submit a fresh live DVR snapshot.")
     return item
 
@@ -93,19 +94,26 @@ def health():
 
 @app.get("/api/studio/usage")
 def quota():
-    return usage()
+    from .provider_quota import GROQ_KEYS, pending, audio_usage
+    configured=sum(bool(os.getenv(k)) for k in GROQ_KEYS)
+    return {**usage(),**audio_usage(),"groq_slots":configured, "reserve_percent":1,"paused":pending(),
+            "groq_enabled":bool(configured and os.getenv("GROQ_CONFIRMED_FREE_PLAN","").lower()=="true")}
 
 
 def process(folder, source, opts, source_name):
     from .pipeline import run_pipeline
     def report(pct, msg):
         change = {"resumable":False} if msg == "Reading retained live DVR" else {}
-        update(folder, status="running", percent=pct, progress=pct, stage=msg, **change)
+        if msg.startswith("Paused for "):
+            stage,reset,section=msg.split(" | ")
+            update(folder,status="paused",percent=pct,progress=pct,stage=f"{stage} · {section}",reset_at=reset)
+        else:
+            update(folder, status="running", percent=pct, progress=pct, stage=msg, reset_at=None, **change)
     try:
         with ACTIVE:
             size = 1080 if opts.quality=="1080p" else 720
             kwargs = dict(output_width=size, output_height=size*16//9, preferred_quality=opts.quality,
-                          max_clips=opts.num_clips, clip_duration_target_sec=opts.clip_duration,
+                          max_clips=opts.num_clips, clip_duration_target_sec=opts.clip_duration,subtitle_font=opts.subtitle_font,
                           enable_overlay=opts.enable_overlay, creator_tag=opts.creator_tag or os.getenv("CLIPPER_CREATOR_TAG", ""),
                           overlay_badge=opts.overlay_badge, frame_style=opts.frame_style,
                           scan_mode=opts.scan_mode, range_start=opts.range_start, range_end=opts.range_end)
@@ -123,11 +131,12 @@ def process(folder, source, opts, source_name):
                                   file=c.filepath.name, filename=c.filepath.name, thumbnail=c.thumbnail_path.name,
                                   media_url=base+c.filepath.name, download_url=base+c.filepath.name+"?download=1",
                                   thumb_url=base+c.thumbnail_path.name, hook=c.hook_text,
-                                  captions=bool(c.subtitle_path and c.subtitle_path.stat().st_size),
+                                  srt_url=base+c.filepath.stem+".srt", captions=bool(c.subtitle_path and c.subtitle_path.stat().st_size),
                                   time_range=f"{source_time(c.start_time)} – {source_time(c.end_time)}"))
             update(folder, status="completed", percent=100, progress=100,
                    stage="Clips ready" if clips else "No qualifying gameplay found",
                    num_clips=len(clips), clips=clips, resumable=False,
+                   transcript_url=f"/api/studio/jobs/{folder.name}/transcript",
                    scan_mode=result.metadata.get("scan_mode"), timeline_origin=result.metadata.get("timeline_origin"),
                    available_range=result.metadata.get("available_range"),
                    zip_url=f"/api/studio/jobs/{folder.name}/bundle" if clips else None, video_title=source_name or result.metadata.get("title"),
@@ -187,6 +196,36 @@ async def enqueue(opts, tasks, upload=None):
         raise
 
 
+def recover_paused():
+    """Resume durable recording jobs when an idle or restarted worker starts again."""
+    for path in (STATE/"jobs").glob("*/job.json"):
+        try:
+            item=json.loads(path.read_text())
+            if item.get("status")!="paused" or item.get("session")==SESSION or not item.get("resumable"):
+                continue
+            folder=path.parent
+            saved=json.loads((folder/"request.json").read_text())
+            opts=Options(**saved["options"])
+            source=folder/saved["upload"] if saved["upload"] else opts.url
+            if isinstance(source,Path) and not source.is_file():
+                continue
+            with MUTEX:
+                current=json.loads(path.read_text())
+                if current.get("session")==SESSION or current.get("status")!="paused":
+                    continue
+                if not QUEUE.acquire(blocking=False):
+                    continue
+                update(folder,session=SESSION,status="queued",stage="Restoring paused scan")
+            process(folder,source,opts,saved["source_name"])
+        except (OSError, ValueError, KeyError):
+            continue
+
+
+@app.on_event("startup")
+def restore_jobs():
+    Thread(target=recover_paused,daemon=True,name="restore-paused-jobs").start()
+
+
 @app.post("/api/studio/jobs/{job_id}/resume")
 def resume_job(job_id: str, background_tasks: BackgroundTasks):
     folder = job_path(job_id)
@@ -218,13 +257,14 @@ async def start_upload(background_tasks: BackgroundTasks, url: str = Form(""), f
                        max_clips: int=Form(3, ge=1, le=10), clip_duration: int=Form(30, ge=20, le=45),
                        quality: Literal["720p","1080p"]=Form("1080p"), enable_overlay: bool=Form(True),
                        creator_tag: str=Form("", max_length=32), overlay_badge: str=Form("GTA VI", max_length=20),
+                       subtitle_font: Literal["Sans","Serif","Mono"]=Form("Sans"),
                        frame_style: Literal["blur_bg","fill_crop"]=Form("blur_bg"),
                        scan_mode: Literal["full","quick"]=Form("full"), range_start: float=Form(0,ge=0,allow_inf_nan=False),
                        range_end: float | None=Form(None,gt=0,allow_inf_nan=False),
                        whisper_model: Literal["tiny","base","small","medium","large"] | None=Form(None)):
     opts = Options(url=url, num_clips=max_clips, clip_duration=clip_duration, quality=quality,
                    enable_overlay=enable_overlay, creator_tag=creator_tag, overlay_badge=overlay_badge,
-                   frame_style=frame_style, whisper_model=whisper_model,scan_mode=scan_mode,
+                   subtitle_font=subtitle_font,frame_style=frame_style, whisper_model=whisper_model,scan_mode=scan_mode,
                    range_start=range_start,range_end=range_end)
     return await enqueue(opts, background_tasks, file)
 
@@ -248,11 +288,21 @@ def clips(job_id: str):
     return {"clips": read_job(job_id)["clips"]}
 
 
+@app.get("/api/studio/jobs/{job_id}/transcript")
+def transcript(job_id: str):
+    path=job_path(job_id)/"transcript.json"
+    if read_job(job_id)["status"]!="completed" or not path.is_file():
+        raise HTTPException(404,"Transcript unavailable")
+    return FileResponse(path, media_type="application/json",filename="transcript.json")
+
+
 @app.get("/api/studio/jobs/{job_id}/media/{filename}")
 def media(job_id: str, filename: str, download: bool=False):
     folder = job_path(job_id)
     if re.fullmatch(r"clip_\d{2}\.mp4", filename):
         path, mime = folder/"clips"/filename, "video/mp4"
+    elif re.fullmatch(r"clip_\d{2}\.srt",filename):
+        path, mime = folder/"subtitles"/filename, "application/x-subrip"
     elif re.fullmatch(r"clip_\d{2}_thumb\.jpg", filename):
         path, mime = folder/"thumbnails"/filename, "image/jpeg"
     else:

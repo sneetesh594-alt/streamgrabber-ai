@@ -217,7 +217,7 @@ def _seconds_to_srt_time(seconds: float) -> str:
 def _generate_single_clip(video_path, output_path, start_time, end_time, output_width, output_height,
                           output_fps, face_bbox, srt_path, hook_text, subtitle_font_size,
                           subtitle_font_color, hook_font_size, hook_font_color,
-                          enable_overlay=True, creator_tag="", badge="GTA VI", frame_style="blur_bg"):
+                          enable_overlay=True, creator_tag="", badge="GTA VI", frame_style="blur_bg", subtitle_font="Sans"):
     w, h = output_width, output_height
     # Fixed working filenames keep user-controlled strings out of FFmpeg's filter language.
     with tempfile.TemporaryDirectory() as folder:
@@ -234,15 +234,23 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
                      f"boxblur=12:2,scale={w}:{h},eq=brightness=-0.10[bg];"
                      f"[front]scale={w}:{h}:force_original_aspect_ratio=decrease:"
                      f"force_divisible_by=2,setsar=1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]")
+        families = {"Sans":"DejaVu Sans","Serif":"DejaVu Serif","Mono":"DejaVu Sans Mono"}
+        family = families[subtitle_font]
+        logo = enable_overlay and badge.strip().upper() in {"GTA VI","GTA 6","GTA6"}
+        logo_args = []
+        if logo:
+            logo_path = Path(__file__).with_name("studio")/"assets"/"gta-vi.png"
+            logo_args = ["-i", str(logo_path.resolve())]
+            graph += f";[1:v]scale={round(w*.115)}:-1,format=rgba[logo];[base][logo]overlay=x=W*.055:y=H*.055:format=auto[branded]"
         layers = []
         def label(name, value, size, position, style):
             plain = " ".join(str(value).split())[:92]
             if plain:
                 (work / name).write_text(plain, encoding="utf-8")
-                layers.append(f"drawtext=font='DejaVu Sans\\:style=Bold':textfile={name}:expansion=none:"
+                layers.append(f"drawtext=font='{family}\\:style=Bold':textfile={name}:expansion=none:"
                               f"fontsize={size}:{position}:{style}")
         if enable_overlay:
-            label("badge.txt", badge, round(w*.038), "x=w*.055:y=h*.06",
+            label("badge.txt", "" if logo else badge, round(w*.038), "x=w*.055:y=h*.06",
                   "fontcolor=white:box=1:boxcolor=0xBB3054:boxborderw=7")
             label("creator.txt", creator_tag, round(w*.032), "x=w-tw-w*.055:y=h*.06",
                   "fontcolor=white:box=1:boxcolor=black@.65:boxborderw=7")
@@ -250,16 +258,16 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
             if hook_text:
                 clean_hook = " ".join(str(hook_text).split())
                 (work/"hook.txt").write_text("\n".join(textwrap.wrap(clean_hook[:75], 27)), encoding="utf-8")
-                layers.append(f"drawtext=font='DejaVu Sans\\:style=Bold':textfile=hook.txt:expansion=none:"
+                layers.append(f"drawtext=font='{family}\\:style=Bold':textfile=hook.txt:expansion=none:"
                               f"fontsize={min(hook_font_size,round(w*.046))}:fontcolor=white:borderw=2:"
                               "bordercolor=black:x=(w-tw)/2:y=h*.17:alpha='min(1,max(0,8-t))'")
         if srt_path and Path(srt_path).exists() and Path(srt_path).stat().st_size:
             import shutil
             shutil.copyfile(srt_path, work/"captions.srt")
-            layers.append("subtitles=captions.srt:force_style='FontName=DejaVu Sans,Alignment=2,"
+            layers.append(f"subtitles=captions.srt:force_style='FontName={family},Alignment=2,"
                           f"FontSize={max(10,round(subtitle_font_size*288/1080))},MarginV=28,Outline=2'")
         layers += [f"fps={output_fps}", "format=yuv420p"]
-        graph += ";[base]" + ",".join(layers) + "[v]"
+        graph += (";[branded]" if logo else ";[base]") + ",".join(layers) + "[v]"
         target = Path(output_path).resolve()
         temp = target.with_suffix(".part.mp4")
         from .runtime_memory import low_memory
@@ -269,7 +277,7 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
             encoder += ["-tune", "zerolatency", "-x264-params", "ref=1:rc-lookahead=0"]
         try:
             cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "1" if bounded else "2", "-ss", str(start_time),
-                   "-i", str(Path(video_path).resolve()), "-t", str(end_time-start_time),
+                   "-i", str(Path(video_path).resolve()), *logo_args, "-t", str(end_time-start_time),
                    "-filter_complex_threads", "1" if bounded else "2", "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
                    "-c:v", "libx264", *encoder, "-crf", "22",
                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(temp)]
