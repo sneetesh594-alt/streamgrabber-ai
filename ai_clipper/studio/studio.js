@@ -191,7 +191,11 @@ async function watch(id, label) {
         el('job-status').textContent=line;
         if('Notification' in window && Notification.permission==='granted' && notified.get(id)!==job.reset_at){
           notified.set(id,job.reset_at);
-          try{new Notification('Clip Studio paused',{body:line,tag:id});}catch{}
+          try{
+            const reg=await alertWorker();
+            if(reg?.active)await reg.showNotification('Clip Studio paused',{body:line,tag:id});
+            else new Notification('Clip Studio paused',{body:line,tag:id});
+          }catch{}
         }
       }
       if (job.status==='error' && job.resumable) {
@@ -303,9 +307,13 @@ el('usage-open').onclick = async () => {
   } catch(e){panel.replaceChildren(element('p',e.message));}
 };
 const notified=new Map();
+async function alertWorker(){
+  if(!('serviceWorker' in navigator))return null;
+  return navigator.serviceWorker.register('/studio-assets/alerts.js');
+}
 el('alerts').onclick=async()=>{
   const btn=el('alerts');
-  try{btn.textContent='Notification' in window && await Notification.requestPermission()==='granted'?'Quota alerts enabled':'Quota alerts appear in Current job';}catch{btn.textContent='Quota alerts appear in Current job';}
+  try{const enabled='Notification' in window && await Notification.requestPermission()==='granted';if(enabled)await alertWorker();btn.textContent=enabled?'Quota alerts enabled':'Quota alerts appear in Current job';}catch{btn.textContent='Quota alerts appear in Current job';}
 };
 el('try-sample').onclick=async()=>{
   const panel=el('sample-content');panel.replaceChildren(element('p','Loading sample…'));el('sample-dialog').showModal();
