@@ -21,11 +21,12 @@ def test_remote_scan_and_exact_sections(tmp_path, monkeypatch):
     def extract(args, timeout):
         calls.append(args)
         if len(calls) == 1:
-            raise ValueError("The video host refused access.")
-        (tmp_path/"section.mp4").touch()
+            raise sources.SourceAccessError("forbidden","HTTP 403")
+        Path(args[args.index("-o")+1].replace("%(ext)s","mp4")).touch()
     monkeypatch.setattr(sources,"_yt",extract)
     monkeypatch.setattr(sources,"get_video_info",lambda p:type("Video",(),{"duration_sec":30})())
     sources.fetch_section("https://youtu.be/laJ5g7gMRjk",123,153,tmp_path/"section.mp4",360)
+    assert calls[0][calls[0].index("--format")+1] != calls[1][calls[1].index("--format")+1]
     assert len(calls) == 2
     assert all(c[c.index("--download-sections")+1] == "*123.000-153.000" for c in calls)
 
@@ -116,3 +117,11 @@ def test_render_caption_pixels_and_portrait(tmp_path,size,overlays):
     assert ok and (frame[int(vid["height"]*.70):].min(axis=2)>190).sum()>15
     upper=frame[:int(vid["height"]*.13)]
     assert bool((upper.min(axis=2)>200).sum()>12) is overlays
+
+@pytest.mark.parametrize("reason,code",[("Sign in to confirm you’re not a bot","verification"),("Private video. Sign in","restricted"),("HTTP Error 403: Forbidden","forbidden")])
+def test_source_refusal_diagnosis(reason,code,monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(sources.subprocess,"run",lambda *a,**k:SimpleNamespace(returncode=1,stderr=reason))
+    with pytest.raises(sources.SourceAccessError) as error:
+        sources._yt([],30)
+    assert error.value.code==code

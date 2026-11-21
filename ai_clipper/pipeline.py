@@ -30,13 +30,14 @@ class PipelineResult:
     metadata: dict = field(default_factory=dict)
     output_dir: Path | None = None
     runtime_sec: float = 0.0
+    source_error: str | None = None
     errors: list[str] = field(default_factory=list)
 
 
 def run_pipeline(source, output_dir="./output", config=None, progress=None):
     from .config import config as defaults
     from .downloader import get_video_info
-    from .sources import metadata, inspection_ranges, fetch_section, make_proxy
+    from .sources import SourceAccessError, metadata, inspection_ranges, fetch_section, make_proxy
     from . import checkpoints, groq_speech
     from .provider_quota import wait_for_reset
     from datetime import datetime, timezone
@@ -136,7 +137,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                         else:
                             fetch_section(source,start,end,section,360)
                     except ValueError as exc:
-                        if "refused access" in str(exc) or len(coverage)==1:
+                        if isinstance(exc, SourceAccessError) or len(coverage)==1:
                             raise
                         section.unlink(missing_ok=True)
                         warnings.append(f"Section {index+1} was unavailable.")
@@ -255,6 +256,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
             result.runtime_sec = time.monotonic()-started
             _save_metadata(result, output_dir)
             report(100, "Clips ready" if selected else "No qualifying gameplay found in the inspected footage")
+    except SourceAccessError as exc:
+        result.source_error = exc.code
+        result.errors.append(str(exc))
     except (ValueError, FileNotFoundError) as exc:
         result.errors.append(str(exc) if isinstance(exc, ValueError) else "Input or processing dependency is unavailable.")
     except Exception as exc:

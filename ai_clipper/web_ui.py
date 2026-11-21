@@ -75,6 +75,8 @@ def read_job(job_id):
     item = json.loads(file.read_text())
     if item.pop("session", "") != SESSION and item["status"] in ("running", "queued", "paused"):
         item.update(status="error", error="The processing server restarted. Resume a saved recording scan or submit a fresh live DVR snapshot.")
+    if item.get("status")=="error" and "The video host refused access" in (item.get("error") or ""):
+        item.setdefault("source_error","access")
     return item
 
 
@@ -121,7 +123,7 @@ def process(folder, source, opts, source_name):
                 kwargs["whisper_model"] = opts.whisper_model
             result = run_pipeline(str(source), folder, ClipperConfig(**kwargs), progress=report)
             if result.errors:
-                update(folder, status="error", stage="Processing stopped", error=result.errors[0])
+                update(folder, status="error", stage="Processing stopped", error=result.errors[0],source_error=result.source_error)
                 return
             clips = []
             for c in result.clips:

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -47,15 +48,34 @@ def _options():
     return args
 
 
+class SourceAccessError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def _yt(arguments, timeout):
     try:
-        proc = subprocess.run(_options() + arguments, capture_output=True, text=True, timeout=timeout)
+        opts = _options()
+        with tempfile.TemporaryDirectory(prefix="studio-extract-") as tmp:
+            if "--cookies" in opts:
+                # yt-dlp writes back its jar. Render secret files can be read-only.
+                idx = opts.index("--cookies") + 1
+                jar = Path(tmp)/"cookies.txt"
+                shutil.copyfile(opts[idx], jar)
+                jar.chmod(0o600)
+                opts[idx] = str(jar)
+            proc = subprocess.run(opts + arguments, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise ValueError("The video host timed out. Retry or upload your recording.") from None
     if proc.returncode:
         reason = proc.stderr.lower()
-        if "403" in reason or "sign in" in reason or "login" in reason or "bot" in reason:
-            raise ValueError("The video host refused access. Upload your recording or configure authorized server cookies.")
+        if any(term in reason for term in ("not a bot","not a robot","confirm you’re human","confirm you are human")):
+            raise SourceAccessError("verification", "The platform requires verification before this server can read the video.")
+        if any(term in reason for term in ("private video","members-only","members only","sign in","login required","log in","http error 401")):
+            raise SourceAccessError("restricted", "The platform requires an account with access to this video.")
+        if "403" in reason or "forbidden" in reason:
+            raise SourceAccessError("forbidden", "The platform refused this server’s request for the video (HTTP 403).")
         raise ValueError("The video host could not provide this recording. Check its access or upload the file.")
     return proc.stdout
 
@@ -139,17 +159,23 @@ def inspection_ranges(info, mode, start, end, overlap, budget):
 def fetch_section(url, start, end, dest, height):
     fmt = (f"best[height<={height}][vcodec!=none][acodec!=none]/"
            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/worst")
-    def download():
-        _yt(["--format", fmt, "--download-sections", f"*{start:.3f}-{end:.3f}",
+    def download(selector, target):
+        _yt(["--format", selector, "--download-sections", f"*{start:.3f}-{end:.3f}",
              "--force-keyframes-at-cuts", "--downloader", "ffmpeg", "--merge-output-format", "mp4",
-             "--remux-video", "mp4", "-o", str(dest.with_suffix(".%(ext)s")), "--", stream_url(url)], max(240, 2 * (end-start) + 90))
+             "--remux-video", "mp4", "-o", str(target.with_suffix(".%(ext)s")), "--", stream_url(url)], max(240, 2 * (end-start) + 90))
     try:
-        download()
-    except ValueError as exc:
-        if "refused access" not in str(exc):
+        download(fmt, dest)
+    except SourceAccessError as exc:
+        if exc.code != "forbidden":
             raise
-        # Resolve a fresh media URL once. Private or unavailable media remains an error.
-        download()
+        # Resolve the provider's advertised public HTTP formats afresh. Isolate partial files.
+        direct = f"best[protocol=https][height<={height}][vcodec!=none][acodec!=none]/bestvideo[protocol=https][height<={height}]+bestaudio[protocol=https]"
+        with tempfile.TemporaryDirectory(dir=dest.parent) as tmp:
+            target = Path(tmp)/dest.name
+            download(direct+"/"+fmt, target)
+            if not target.is_file():
+                raise ValueError("The platform did not return the requested video section.")
+            target.replace(dest)
     if not dest.is_file() or abs(get_video_info(dest).duration_sec - (end - start)) > 2.5:
         raise ValueError("The platform did not return the requested video section.")
 

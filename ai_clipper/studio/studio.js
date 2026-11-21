@@ -198,11 +198,18 @@ async function watch(id, label) {
           }catch{}
         }
       }
+      if(job.status==='error' && job.source_error){
+        const upload=element('button','Upload recording','secondary');
+        upload.onclick=()=>{setMode('file');el('clip-form').scrollIntoView({block:'start'});el('video-file').click();};
+        const other=element('button','Use another link','secondary');
+        other.onclick=()=>{setMode('link');el('stream').focus();el('stream').select();};
+        el('job-results').replaceChildren(upload,other);
+      }
       if (job.status==='error' && job.resumable) {
-        const resume=element('button','Resume scan','secondary');
+        const resume=element('button',job.source_error?'Retry after access changes':'Resume scan','secondary');
         resume.onclick=async()=>{try{resume.disabled=true;await api('/api/studio/jobs/'+id+'/resume',{method:'POST'});watch(id,label);}
           catch(e){el('job-status').textContent=e.message;resume.disabled=false;}};
-        el('job-results').replaceChildren(resume);
+        el('job-results').append(resume);
       }
       if (job.status === 'error' || job.status === 'completed') {
         if(job.transcript_url){
