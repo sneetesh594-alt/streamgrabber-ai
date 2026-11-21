@@ -1,0 +1,43 @@
+name: Live studio health
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-health:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify deployed health and private access
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+          origin = "https://streamgrabber-ai.onrender.com"
+          def read(path, data=None):
+              request = urllib.request.Request(origin+path, data=data,
+                  headers={"Content-Type":"application/json"})
+              try:
+                  with urllib.request.urlopen(request, timeout=45) as response:
+                      return response.status, response.read().decode()
+              except urllib.error.HTTPError as error:
+                  return error.code, error.read().decode()
+          for attempt in range(3):
+              status, body = read("/api/studio/health")
+              assert status == 200, status
+              health = json.loads(body)
+              assert health["service"] == "streamgrabber-ai" and health["ffmpeg"]
+              assert health["long_streams"] and health["low_memory"]
+              status, body = read("/")
+              assert status == 200 and "Private StreamGrabber Studio" in body
+              assert read("/api/studio/usage")[0] == 403
+              assert read("/api/studio/jobs",
+                  json.dumps({"url":"https://www.youtube.com/watch?v=tvT6ZVHOtWs"}).encode())[0] == 403
+              print("Live health and private API checks passed", attempt+1, flush=True)
+              if attempt < 2:
+                  time.sleep(30)
+          PY
