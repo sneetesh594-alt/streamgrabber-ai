@@ -34,7 +34,7 @@ class PipelineResult:
     errors: list[str] = field(default_factory=list)
 
 
-def run_pipeline(source, output_dir="./output", config=None, progress=None):
+def run_pipeline(source, output_dir="./output", config=None, progress=None, on_details=None):
     from .config import config as defaults
     from .downloader import get_video_info
     from .sources import SourceAccessError, metadata, inspection_ranges, fetch_section, make_proxy
@@ -58,6 +58,14 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     result = PipelineResult(output_dir=output_dir)
     report = progress or (lambda n, msg: console.print(f"[cyan]{n}%[/] {msg}"))
+    analysis = {"sections_read": 0, "frames_analyzed": 0, "candidate_windows": 0,
+                "verified_windows": 0, "speech_segments": 0, "vision": "pending",
+                "speech": "pending"}
+    result.metadata["analysis"] = analysis
+    def details(**changes):
+        result.metadata.update(changes)
+        if on_details:
+            on_details(result.metadata.copy())
     started = time.monotonic()
     dvr, saved_scans = None, None
     retained_sources = {}
@@ -70,6 +78,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
             if remote:
                 info = metadata(source)
                 title = info.get("title", "Gameplay")
+                details(title=title, channel=info.get("uploader") or info.get("channel"),
+                        video_id=info.get("id"), duration_sec=info.get("duration"),
+                        live_status=info.get("live_status"))
                 if info.get("is_live") or info.get("live_status") == "is_live":
                     report(8,"Reading retained live DVR")
                     dvr = open_dvr(info, config.output_width)
@@ -98,6 +109,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                                    ("platform VOD" if remote else "uploaded recording"),
                                    scan_mode=config.scan_mode,timeline_origin=dvr.origin if dvr else "recording start",
                                    available_range=[timeline_offset,timeline_offset+duration])
+            details()
             cloud_active = os.getenv("GEMINI_REVIEW_ENABLED","").lower()=="true"
             if not dvr:
                 saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v2"])
@@ -150,10 +162,16 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                 actual = min(get_video_info(proxy).duration_sec, end-start)
                 bounds = [timeline_offset+start, timeline_offset+start+actual]
                 covered.append(bounds)
+                analysis["sections_read"] += 1
                 batch_warnings = []
                 report(progress_n+1, f"Measuring motion and gameplay in section {index+1}")
                 visual = analyze_visual(proxy, sample_fps=config.clip_sample_fps, use_clip=config.use_clip,
                                         use_face_detection=False)
+                from .vision_models import STATUS as vision_status
+                analysis["frames_analyzed"] += len(visual.frame_scores)
+                analysis["vision"] = (vision_status["backend"] if any(f.gameplay is not None for f in visual.frame_scores)
+                                      else vision_status["state"])
+                details()
                 if (config.use_clip and any(not f.black and f.motion_score > .13 for f in visual.frame_scores)
                         and not any(f.gameplay is not None for f in visual.frame_scores)):
                     batch_warnings.append("Local gameplay model unavailable. Cloud verification is required for these frames.")
@@ -176,9 +194,12 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     try:
                         cache = (saved_scans or temp)/"speech"
                         speech = groq_speech.transcribe(audio, config.whisper_language, cache, pause)
+                        analysis["speech"] = "Groq Whisper" if speech is not None else "Local Whisper"
                         if speech is None:
                             speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
+                        analysis["speech_segments"] += len(speech)
                     except (OSError, RuntimeError, ImportError, ValueError):
+                        analysis["speech"] = "unavailable"
                         batch_warnings.append("Speech model unavailable; captions could not be generated for this section.")
                     finally:
                         release_models()
@@ -187,6 +208,10 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                               for seg in speech]
                 all_speech.extend(transcript)
                 rows = candidates(proxy,start,actual,visual,energy,speech,scenes,config)
+                analysis["candidate_windows"] += len(rows)
+                if not audio_stream.stdout.strip():
+                    analysis["speech"] = "no audio track"
+                details()
                 verified = []
                 for moment in rows:
                     if moment.score < config.min_highlight_score:
@@ -199,6 +224,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                         make_proxy(proxy,preview,moment.start-start,moment.end-moment.start,224)
                         verdict = review(preview," ".join(seg.text for seg in moment.speech),pause,(saved_scans or temp)/"reviews")
                     if verify(moment,verdict,config):
+                        analysis["verified_windows"] += 1
                         verified.append(moment)
                         retain(moment)
                 if checkpoint:
@@ -212,9 +238,16 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                 warnings.extend(batch_warnings)
             if not covered:
                 raise ValueError("The video host did not return any inspectable sections.")
+            if (not selected and analysis["vision"] == "unavailable" and
+                    any("Local gameplay model unavailable" in warning for warning in warnings)):
+                raise ValueError("The gameplay AI model could not load and no cloud reviewer verified the footage. Check model downloads and worker memory before retrying.")
             result.metadata["scanned_ranges"] = covered
             result.metadata["warnings"] = list(dict.fromkeys(warnings))
             release_models()
+            if not selected:
+                warnings.append("No windows passed the gameplay and action checks in the inspected footage.")
+                result.metadata["warnings"] = list(dict.fromkeys(warnings))
+            details()
             report(76,"Rendering verified highlights")
             for folder in ("clips", "subtitles", "thumbnails"):
                 (output_dir/folder).mkdir(exist_ok=True)
@@ -292,6 +325,7 @@ def _save_metadata(result: PipelineResult, output_dir: Path):
         "available_range": result.metadata.get("available_range"),
         "timeline_origin": result.metadata.get("timeline_origin"),
         "scan_mode": result.metadata.get("scan_mode"),
+        "analysis": result.metadata.get("analysis", {}),
         "source": result.metadata.get("source", ""),
         "title": result.metadata.get("title", ""),
         "runtime_sec": result.runtime_sec,

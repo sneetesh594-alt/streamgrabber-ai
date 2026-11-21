@@ -18,6 +18,7 @@ LABELS = (
 )
 REPO = "Xenova/clip-vit-base-patch32"
 REV = "6b7c523703ae26e39be4b03774966f8571c7f523"
+STATUS = {"state": "not_loaded", "backend": "CLIP", "error": None}
 
 
 def _probabilities(image, text):
@@ -69,6 +70,7 @@ def _onnx_model():
 
 @lru_cache(maxsize=1)
 def classifier():
+    STATUS.update(state="loading", error=None)
     try:
         if os.getenv("CLIPPER_VISION_BACKEND", "onnx") == "openclip":
             import open_clip
@@ -83,7 +85,11 @@ def classifier():
                 with torch.inference_mode():
                     vector = model.encode_image(preprocess(Image.fromarray(rgb)).unsqueeze(0).to(device)).cpu().numpy()
                 return _probabilities(vector, text)
+            STATUS.update(state="ready", backend="OpenCLIP")
             return score
-        return _onnx_model()
-    except (ImportError, OSError, RuntimeError, ValueError):
+        score = _onnx_model()
+        STATUS.update(state="ready", backend="ONNX CLIP")
+        return score
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        STATUS.update(state="unavailable", error=type(exc).__name__)
         return None

@@ -30,6 +30,10 @@ MAX_UPLOAD = max(1, int(os.getenv("STREAMGRABBER_UPLOAD_MB", "90"))) * 1024 * 10
 app.mount("/studio-assets", StaticFiles(directory=STATIC), name="studio-assets")
 
 
+from . import invite, remote_scan
+invite.install(app)
+
+
 class Options(BaseModel):
     url: str = Field(default="", max_length=3000)
     num_clips: int = Field(default=3, ge=1, le=10)
@@ -73,11 +77,14 @@ def read_job(job_id):
     if not file.is_file():
         raise HTTPException(404, "Job not found")
     item = json.loads(file.read_text())
-    if item.pop("session", "") != SESSION and item["status"] in ("running", "queued", "paused"):
+    if item.pop("session", "") != SESSION and item["status"] in ("running", "queued", "paused") and not (file.parent/"remote.json").exists():
         item.update(status="error", error="The processing server restarted. Resume a saved recording scan or submit a fresh live DVR snapshot.")
     if item.get("status")=="error" and "The video host refused access" in (item.get("error") or ""):
         item.setdefault("source_error","access")
     return item
+
+
+remote_scan.install(app, lambda: STATE, job_path, update)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,13 +104,22 @@ def health():
 @app.get("/api/studio/usage")
 def quota():
     from .provider_quota import GROQ_KEYS, pending, audio_usage
+    from .vision_models import STATUS
     configured=sum(bool(os.getenv(k)) for k in GROQ_KEYS)
     return {**usage(),**audio_usage(),"groq_slots":configured, "reserve_percent":1,"paused":pending(),
-            "groq_enabled":bool(configured and os.getenv("GROQ_CONFIRMED_FREE_PLAN","").lower()=="true")}
+            "groq_enabled":bool(configured and os.getenv("GROQ_CONFIRMED_FREE_PLAN","").lower()=="true"),
+            "vision": dict(STATUS),
+            "gemini_enabled": bool(os.getenv("GEMINI_REVIEW_ENABLED", "").lower()=="true" and
+                                   any(os.getenv(k) for k in ("GEMINI_API_KEY","SECOND_AI_API_KEY")))}
 
 
 def process(folder, source, opts, source_name):
     from .pipeline import run_pipeline
+    def details(info):
+        update(folder, video_title=source_name or info.get("title"), channel=info.get("channel"),
+               video_id=info.get("video_id"), duration_sec=info.get("duration_sec"),
+               analysis=info.get("analysis", {}), available_range=info.get("available_range"),
+               timeline_origin=info.get("timeline_origin"))
     def report(pct, msg):
         change = {"resumable":False} if msg == "Reading retained live DVR" else {}
         if msg.startswith("Paused for "):
@@ -121,7 +137,7 @@ def process(folder, source, opts, source_name):
                           scan_mode=opts.scan_mode, range_start=opts.range_start, range_end=opts.range_end)
             if opts.whisper_model:
                 kwargs["whisper_model"] = opts.whisper_model
-            result = run_pipeline(str(source), folder, ClipperConfig(**kwargs), progress=report)
+            result = run_pipeline(str(source), folder, ClipperConfig(**kwargs), progress=report, on_details=details)
             if result.errors:
                 update(folder, status="error", stage="Processing stopped", error=result.errors[0],source_error=result.source_error)
                 return
@@ -142,6 +158,7 @@ def process(folder, source, opts, source_name):
                    scan_mode=result.metadata.get("scan_mode"), timeline_origin=result.metadata.get("timeline_origin"),
                    available_range=result.metadata.get("available_range"),
                    zip_url=f"/api/studio/jobs/{folder.name}/bundle" if clips else None, video_title=source_name or result.metadata.get("title"),
+                   analysis=result.metadata.get("analysis", {}),
                    scanned_ranges=result.metadata.get("scanned_ranges", []), warnings=result.metadata.get("warnings",[]))
     except Exception:
         update(folder, status="error", stage="Processing stopped", error="The worker could not complete this job.")
@@ -190,7 +207,11 @@ async def enqueue(opts, tasks, upload=None):
                                                     "upload":source.name if isinstance(source,Path) else None}))
         update(folder, status="queued",resumable=True, stage="Queued for analysis", percent=1, progress=1,
                num_clips=0, clips=[], error=None)
-        tasks.add_task(process, folder, source, opts, name)
+        if remote_scan.enabled(source):
+            remote_scan.enqueue(folder, update)
+            QUEUE.release()
+        else:
+            tasks.add_task(process, folder, source, opts, name)
         return {"success": True, "status": "started", "job_id": folder.name}
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
@@ -203,7 +224,7 @@ def recover_paused():
     for path in (STATE/"jobs").glob("*/job.json"):
         try:
             item=json.loads(path.read_text())
-            if item.get("status")!="paused" or item.get("session")==SESSION or not item.get("resumable"):
+            if (path.parent/"remote.json").exists() or item.get("status")!="paused" or item.get("session")==SESSION or not item.get("resumable"):
                 continue
             folder=path.parent
             saved=json.loads((folder/"request.json").read_text())
@@ -242,6 +263,13 @@ def resume_job(job_id: str, background_tasks: BackgroundTasks):
             raise HTTPException(410, "The worker no longer has this recording.")
         if not QUEUE.acquire(blocking=False):
             raise HTTPException(429,"The processing queue is full.")
+        if remote_scan.enabled(source):
+            try:
+                remote_scan.enqueue(folder,update)
+            finally:
+                QUEUE.release()
+            update(folder,session=SESSION,error=None,source_error=None)
+            return {"job_id":job_id,"status":"queued"}
         update(folder,session=SESSION,status="queued",stage="Resuming saved sections",error=None)
     background_tasks.add_task(process,folder,source,opts,saved["source_name"])
     return {"job_id":job_id,"status":"queued"}

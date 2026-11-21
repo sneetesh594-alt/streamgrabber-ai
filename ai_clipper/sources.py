@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from .downloader import get_video_info
+from .process_runner import run as run_extractor
 
 PLATFORMS = ("youtube.com", "youtu.be", "twitch.tv", "kick.com", "instagram.com",
              "tiktok.com", "x.com", "twitter.com", "facebook.com", "fb.watch")
@@ -37,7 +38,10 @@ def stream_url(value: str) -> str:
 def _options():
     args = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
             "--no-progress", "--no-warnings", "--socket-timeout", "15",
+            "--remote-components", "ejs:github",
             "--retries", "1", "--fragment-retries", "1", "--extractor-retries", "1"]
+    if os.getenv("SSL_CERT_FILE"):
+        args += ["--compat-options", "no-certifi"]
     node = shutil.which("node")
     if node:
         args += ["--js-runtimes", "node:" + node]
@@ -65,7 +69,7 @@ def _yt(arguments, timeout):
                 shutil.copyfile(opts[idx], jar)
                 jar.chmod(0o600)
                 opts[idx] = str(jar)
-            proc = subprocess.run(opts + arguments, capture_output=True, text=True, timeout=timeout)
+            proc = run_extractor(opts + arguments, timeout)
     except subprocess.TimeoutExpired:
         raise ValueError("The video host timed out. Retry or upload your recording.") from None
     if proc.returncode:
@@ -74,6 +78,10 @@ def _yt(arguments, timeout):
             raise SourceAccessError("verification", "The platform requires verification before this server can read the video.")
         if any(term in reason for term in ("private video","members-only","members only","sign in","login required","log in","http error 401")):
             raise SourceAccessError("restricted", "The platform requires an account with access to this video.")
+        if "429" in reason or "too many requests" in reason:
+            raise SourceAccessError("rate_limit", "The platform temporarily rate-limited this server. Wait before retrying this recording.")
+        if "certificate verify failed" in reason:
+            raise SourceAccessError("certificate", "The worker could not validate the video host certificate. Check the worker trusted certificates.")
         if "403" in reason or "forbidden" in reason:
             raise SourceAccessError("forbidden", "The platform refused this server’s request for the video (HTTP 403).")
         raise ValueError("The video host could not provide this recording. Check its access or upload the file.")
@@ -161,7 +169,10 @@ def fetch_section(url, start, end, dest, height):
            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/worst")
     def download(selector, target):
         _yt(["--format", selector, "--download-sections", f"*{start:.3f}-{end:.3f}",
-             "--force-keyframes-at-cuts", "--downloader", "ffmpeg", "--merge-output-format", "mp4",
+             "--force-keyframes-at-cuts", "--downloader", "ffmpeg",
+             "--downloader-args", "ffmpeg_i:-rw_timeout 15000000 -threads 1",
+             "--downloader-args", "ffmpeg_o:-threads 1 -filter_threads 1 -preset ultrafast",
+             "--merge-output-format", "mp4",
              "--remux-video", "mp4", "-o", str(target.with_suffix(".%(ext)s")), "--", stream_url(url)], max(240, 2 * (end-start) + 90))
     try:
         download(fmt, dest)

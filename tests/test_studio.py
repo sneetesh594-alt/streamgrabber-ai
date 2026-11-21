@@ -121,7 +121,7 @@ def test_render_caption_pixels_and_portrait(tmp_path,size,overlays):
 @pytest.mark.parametrize("reason,code",[("Sign in to confirm you’re not a bot","verification"),("Private video. Sign in","restricted"),("HTTP Error 403: Forbidden","forbidden")])
 def test_source_refusal_diagnosis(reason,code,monkeypatch):
     from types import SimpleNamespace
-    monkeypatch.setattr(sources.subprocess,"run",lambda *a,**k:SimpleNamespace(returncode=1,stderr=reason))
+    monkeypatch.setattr(sources,"run_extractor",lambda *a,**k:SimpleNamespace(returncode=1,stderr=reason))
     with pytest.raises(sources.SourceAccessError) as error:
         sources._yt([],30)
     assert error.value.code==code

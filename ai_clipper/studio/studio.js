@@ -181,6 +181,20 @@ async function watch(id, label) {
       el('job-progress').value = job.percent || 0;
       el('job-progress').hidden = job.status === 'error';
       el('job-percent').textContent = job.status === 'error' ? '' : Math.round(job.percent || 0)+'%';
+      const source=el('job-source');
+      source.hidden=!job.video_title;
+      source.textContent=[job.video_title,job.channel,job.duration_sec ? time(job.duration_sec) : ''].filter(Boolean).join(' · ');
+      const analysis=job.analysis;
+      const evidence=el('job-analysis');
+      evidence.hidden=!analysis;
+      evidence.textContent=analysis ? [
+        'Vision '+analysis.vision,
+        'Speech '+analysis.speech,
+        (analysis.frames_analyzed||0)+' frames analyzed',
+        (analysis.speech_segments||0)+' transcript segments',
+        (analysis.candidate_windows||0)+' action windows',
+        (analysis.verified_windows||0)+' verified windows'
+      ].join(' · ') : '';
       const note = job.status === 'error' ? job.error : job.stage;
       const extent = job.available_range;
       const origin = extent ? 'Available '+time(extent[0])+' – '+time(extent[1])+' from '+job.timeline_origin+'.' : '';
@@ -310,7 +324,13 @@ el('usage-open').onclick = async () => {
     for(const [num,label] of [[u.requests+' / '+u.daily_limit,'Gemini requests today'],[u.tokens,'Reported tokens'],['$'+Number(u.estimated_cost_usd).toFixed(2),'API spend'],[u.configured_slots+' / 2','Gemini keys'],[(u.groq_slots||0)+' / 4','Groq keys'],[u.groq_requests||0,'Groq requests · 24h'],[u.groq_audio_seconds||0,'Audio seconds · 24h']]){
       const cell=element('div');cell.append(element('b',String(num)),element('small',label));grid.append(cell);
     }
-    panel.replaceChildren(grid,element('p',u.paused?'Quota reserve reached. Processing will resume after reset.':'Cloud review requires a verified, unbilled Google project. Local analysis is available independently.'));
+    const state = [
+      u.groq_enabled ? 'Groq Whisper enabled.' : 'Groq Whisper is not configured. Local Whisper handles transcription.',
+      u.gemini_enabled ? 'Gemini review enabled.' : 'Gemini review is not configured.',
+      'Local vision '+(u.vision?.state || 'unknown')+'.',
+      u.paused ? 'Quota reserve reached. Processing resumes after reset.' : ''
+    ].filter(Boolean).join(' ');
+    panel.replaceChildren(grid,element('p',state));
   } catch(e){panel.replaceChildren(element('p',e.message));}
 };
 const notified=new Map();
