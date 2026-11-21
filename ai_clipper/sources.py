@@ -194,7 +194,7 @@ def fetch_section(url, start, end, dest, height):
 def make_proxy(source, dest, start, duration, height=288):
     cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "1", "-ss", f"{start:.3f}",
            "-i", str(source), "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
-           "-vf", f"fps=8,scale=-2:'min({height},ih)'", "-c:v", "libx264",
+           "-filter_threads", "1", "-vf", f"fps=8,scale=-2:'min({height},ih)'", "-c:v", "libx264",
            "-preset", "ultrafast", "-crf", "27", "-threads", "2",
            "-c:a", "aac", "-ac", "1", "-ar", "16000", "-b:a", "32k", str(dest)]
     subprocess.run(cmd, check=True, capture_output=True, timeout=max(180, 2*duration+90))

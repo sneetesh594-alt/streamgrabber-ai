@@ -112,7 +112,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
             details()
             cloud_active = os.getenv("GEMINI_REVIEW_ENABLED","").lower()=="true"
             if not dvr:
-                saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v3"])
+                saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v4"])
             else:
                 warnings.append("Inspected the completed segments the provider exposed when this job started.")
             report(9, f"Inspecting {len(coverage)} source sections")
@@ -180,6 +180,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None, on_d
                         checkpoints.save(checkpoint,[],[],bounds,batch_warnings)
                     section.unlink(missing_ok=True)
                     warnings.extend(batch_warnings)
+                    release_models()
                     continue
                 release_models()
                 report(progress_n+1, f"Checking scene cuts in section {index+1}")

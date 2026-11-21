@@ -292,7 +292,7 @@ def _generate_thumbnail(
 ):
     """Video se thumbnail frame extract karo."""
     cmd = [
-        "ffmpeg",
+        "ffmpeg", "-threads", "1", "-filter_threads", "1",
         "-ss", str(time_sec),
         "-i", str(video_path),
         "-vframes", "1",
@@ -300,7 +300,7 @@ def _generate_thumbnail(
         "-y",
         str(output_path)
     ]
-    subprocess.run(cmd, capture_output=True, text=True)
+    subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
 
 
 def _get_video_dimensions(video_path: Path) -> tuple[int, int]:

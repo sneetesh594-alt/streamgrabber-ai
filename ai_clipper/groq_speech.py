@@ -16,7 +16,7 @@ def transcribe(audio, language, cache, report):
     keys=list(dict.fromkeys(os.environ[k] for k in GROQ_KEYS if os.getenv(k)))
     if not keys or os.getenv("GROQ_CONFIRMED_FREE_PLAN","").lower()!="true":
         return None
-    digest=hashlib.sha256(audio.read_bytes()+(language or "auto").encode()).hexdigest()
+    digest=hashlib.sha256(b"speech-confidence-v2"+audio.read_bytes()+(language or "auto").encode()).hexdigest()
     cache.mkdir(parents=True,exist_ok=True)
     entry=cache/(digest+".json")
     if entry.is_file():
@@ -46,7 +46,10 @@ def transcribe(audio, language, cache, report):
             result=response.json()
             segments=[TranscriptSegment(float(s["start"]),float(s["end"]),s["text"].strip(),
                       result.get("language") or language or "und") for s in result["segments"]
-                      if 0<=float(s["start"])<float(s["end"])<=seconds+1 and s["text"].strip()]
+                      if 0<=float(s["start"])<float(s["end"])<=seconds+1 and s["text"].strip()
+                      and float(s.get("no_speech_prob",0)) < .6
+                      and float(s.get("avg_logprob",0)) >= -1.
+                      and float(s.get("compression_ratio",0)) <= 2.4]
         except (requests.RequestException,KeyError,ValueError,TypeError):
             wait_for_reset(report)
             return None

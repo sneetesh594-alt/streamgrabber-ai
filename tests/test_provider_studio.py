@@ -34,7 +34,8 @@ def test_groq_success_cached_before_pause(tmp_path,monkeypatch):
         status_code=200
         headers={"x-ratelimit-limit-requests":"100","x-ratelimit-remaining-requests":"1","x-ratelimit-reset-requests":"1s"}
         def json(self):
-            return {"segments":[{"start":0,"end":1,"text":"Great chase!"}],"language":"en"}
+            return {"segments":[{"start":0,"end":1,"text":"Great chase!"},
+                                {"start":0,"end":1,"text":"Uncertain words","avg_logprob":-2.}],"language":"en"}
     calls=[]
     def send(url,**kwargs):
         calls.append(url)
@@ -44,7 +45,7 @@ def test_groq_success_cached_before_pause(tmp_path,monkeypatch):
     notices=[]
     for _ in range(2):
         rows=groq_speech.transcribe(audio,None,tmp_path/"cache",lambda *evt:notices.append(evt))
-        assert rows[0].text=="Great chase!"
+        assert len(rows)==1 and rows[0].text=="Great chase!"
     assert len(calls)==1 and notices
 
 
