@@ -49,6 +49,18 @@ function time(seconds) {
   const n = Math.floor(seconds);
   return (n >= 3600 ? Math.floor(n/3600)+':' : '') + String(Math.floor(n%3600/60)).padStart(2,'0') + ':' + String(n%60).padStart(2,'0');
 }
+function secondsField(id) {
+  const value = el(id).value.trim();
+  if (!value) return null;
+  if (!/^\d{1,3}:[0-5]\d:[0-5]\d$/.test(value)) throw new Error('Use HH:MM:SS, for example 18:30:00.');
+  const [hours,minutes,seconds] = value.split(':').map(Number);
+  return hours*3600+minutes*60+seconds;
+}
+el('scan-mode').onchange = () => {
+  el('scan-hint').textContent = el('scan-mode').value === 'quick'
+    ? 'Sample across the timeline, including the first and last minute.'
+    : 'Inspect every section of the recording or available live DVR.';
+};
 async function api(path, options = {}) {
   let res;
   try { res = await fetch(path, {cache:'no-store',...options}); }
@@ -92,7 +104,13 @@ function choose(file) {
   el('form-note').textContent = '';
 }
 el('link-tab').onclick = () => setMode('link');
-el('file-tab').onclick = () => setMode('file');
+el('file-tab').onclick = async () => {
+  setMode('file');
+  try {
+    const health = await api('/api/studio/health');
+    el('upload-help').textContent = 'MP4, MOV, MKV or WebM · up to '+health.max_upload_mb+' MB';
+  } catch {}
+};
 el('fewer').onclick = () => setCount(-1);
 el('more').onclick = () => setCount(1);
 for (const id of ['overlay','badge','tag','quality']) el(id).addEventListener('input',preview);
@@ -156,7 +174,16 @@ async function watch(id, label) {
       el('job-progress').hidden = job.status === 'error';
       el('job-percent').textContent = job.status === 'error' ? '' : Math.round(job.percent || 0)+'%';
       const note = job.status === 'error' ? job.error : job.stage;
-      el('job-status').textContent = [note,...(job.warnings || [])].filter(Boolean).join(' ');
+      const extent = job.available_range;
+      const origin = extent ? 'Available '+time(extent[0])+' – '+time(extent[1])+' from '+job.timeline_origin+'.' : '';
+      const coverage = job.scanned_ranges?.length ? 'Inspected '+job.scanned_ranges.length+' sections.' : '';
+      el('job-status').textContent = [note,origin,coverage,...(job.warnings || [])].filter(Boolean).join(' ');
+      if (job.status==='error' && job.resumable) {
+        const resume=element('button','Resume scan','secondary');
+        resume.onclick=async()=>{try{resume.disabled=true;await api('/api/studio/jobs/'+id+'/resume',{method:'POST'});watch(id,label);}
+          catch(e){el('job-status').textContent=e.message;resume.disabled=false;}};
+        el('job-results').replaceChildren(resume);
+      }
       if (job.status === 'error' || job.status === 'completed') {
         for (const c of job.clips || []) el('job-results').append(videoCard(c,id));
         if (location.hash === '#library') library();
@@ -180,16 +207,26 @@ el('clip-form').onsubmit = async event => {
       if (!['https:','http:'].includes(parsed.protocol) || parsed.username || parsed.password ||
           !hostnames.some(host => parsed.hostname === host || parsed.hostname.endsWith('.'+host))) throw new Error();
     } catch {note.textContent='Enter a video URL from one of the listed platforms.';el('stream').focus();return;}
-  } else if (!selectedFile || selectedFile.size > 90*1024*1024) {
-    note.textContent = 'Choose a video recording under 90 MB.';return;
+  } else if (!selectedFile) {
+    note.textContent = 'Choose a video recording.';return;
   }
   const opts = {num_clips:count, clip_duration:Number(el('duration').value),quality:el('quality').value,
     enable_overlay:el('overlay').checked,creator_tag:el('tag').value.trim(),overlay_badge:el('badge').value.trim()};
+  try {
+    opts.scan_mode=el('scan-mode').value;
+    opts.range_start=secondsField('range-start') || 0;
+    const end=secondsField('range-end');
+    if(end!==null){
+      if(end-opts.range_start<20)throw new Error('Select at least 20 seconds between start and end.');
+      opts.range_end=end;
+    }
+  }catch(e){note.textContent=e.message;return;}
   const btn=el('generate');btn.disabled=true;
   try {
     note.textContent = 'Connecting to the video worker…';
     const h = await api('/api/studio/health',{signal:AbortSignal.timeout(85000)});
-    if (h.studio_version !== 4 || !h.evidence_required) throw new Error('The video worker is updating. Try again shortly.');
+    if (h.studio_version !== 4 || !h.evidence_required || !h.long_streams) throw new Error('The video worker is updating. Try again shortly.');
+    if(mode==='file' && selectedFile.size>h.max_upload_mb*1024*1024) throw new Error('This worker accepts uploads up to '+h.max_upload_mb+' MB. Paste a stream link for a larger recording.');
     let job;
     if (mode==='link') {
       job=await api('/api/studio/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...opts,url})});

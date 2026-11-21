@@ -87,7 +87,8 @@ def analyze_visual(
     )
 
     from .vision_models import classifier
-    classifier_fn = classifier() if use_clip else None
+    classifier_fn = None
+    model_checked = False
 
     # Initialize face detector
     face_cascade = None
@@ -115,8 +116,6 @@ def analyze_visual(
                 time_sec = frame_idx / video_fps
                 score = FrameScore(time_sec=time_sec, frame_index=frame_idx)
 
-                if classifier_fn is not None:
-                    score.gameplay, score.clip_score = classifier_fn(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
                 # --- Face Detection ---
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -132,6 +131,12 @@ def analyze_visual(
                     diff = cv2.absdiff(prev_gray, small)
                     moving = float((diff > 12).mean())
                     score.motion_score = min(1.0, moving * 1.8)
+                if use_clip and not score.black and (prev_gray is None or score.motion_score > .03 or not use_motion_detection):
+                    if not model_checked:
+                        classifier_fn = classifier()
+                        model_checked = True
+                    if classifier_fn is not None:
+                        score.gameplay, score.clip_score = classifier_fn(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 prev_gray = small
                 score.combined_score = .55 * score.motion_score + .45 * score.clip_score
 

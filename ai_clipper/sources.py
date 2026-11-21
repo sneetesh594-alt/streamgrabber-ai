@@ -63,8 +63,10 @@ def _yt(arguments, timeout):
 def metadata(url):
     info = json.loads(_yt(["--skip-download", "--dump-single-json", "--", stream_url(url)], 90))
     duration = float(info.get("duration") or 0)
-    if info.get("is_live") or not math.isfinite(duration) or duration <= 0:
-        raise ValueError("Choose a completed VOD with a known duration.")
+    if info.get("live_status") == "is_upcoming":
+        raise ValueError("The stream has not started yet.")
+    if not info.get("is_live") and info.get("live_status") != "is_live" and (not math.isfinite(duration) or duration<=0):
+        raise ValueError("The host did not provide a usable recording duration.")
     return info
 
 
@@ -98,13 +100,49 @@ def scan_ranges(info, budget=14, span=64):
     return [(s, min(duration, s + span)) for s in sorted(starts[:budget])]
 
 
+def inspection_ranges(info, mode, start, end, overlap, budget):
+    """Select a time interval first; full scans cover every second, including the last frame."""
+    duration = float(info["duration"])
+    first = float(start or 0)
+    last = duration if end is None else float(end)
+    if not (0 <= first < last <= duration + .05):
+        raise ValueError("The selected time range is outside the available recording.")
+    length = last-first
+    if length < 20:
+        raise ValueError("Select an interval of at least 20 seconds.")
+    if mode not in ("full", "quick") or not 20 <= overlap <= 45:
+        raise ValueError("Choose a scan mode and a clip length between 20 and 45 seconds.")
+    if mode == "full":
+        span = 240.
+        scans = []
+        position = first
+        while position < last:
+            stop = min(last, position+span)
+            scans.append((position,stop))
+            if stop >= last:
+                break
+            position = stop-overlap
+        return scans
+    local = {"duration":length}
+    for key in ("heatmap","chapters"):
+        local[key] = [dict(row, start_time=max(0,row["start_time"]-first),
+                           end_time=min(length,row["end_time"]-first))
+                      for row in info.get(key) or [] if row.get("end_time",0)>first
+                      and row.get("start_time",last)<last]
+    probes = scan_ranges(local, max(budget, math.ceil(length/3600)*2))
+    if length > 64:
+        # Inspect both edges; a highlight may occur in the opening or closing minutes.
+        probes = sorted(set(probes + [(0.,64.),(length-64.,length)]))
+    return [(first+a,first+b) for a,b in probes]
+
+
 def fetch_section(url, start, end, dest, height):
     fmt = (f"best[height<={height}][vcodec!=none][acodec!=none]/"
            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/worst")
     def download():
         _yt(["--format", fmt, "--download-sections", f"*{start:.3f}-{end:.3f}",
              "--force-keyframes-at-cuts", "--downloader", "ffmpeg", "--merge-output-format", "mp4",
-             "--remux-video", "mp4", "-o", str(dest.with_suffix(".%(ext)s")), "--", stream_url(url)], 240)
+             "--remux-video", "mp4", "-o", str(dest.with_suffix(".%(ext)s")), "--", stream_url(url)], max(240, 2 * (end-start) + 90))
     try:
         download()
     except ValueError as exc:

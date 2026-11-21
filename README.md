@@ -1,206 +1,56 @@
-# 🎬 AI Video Clipper
+# StreamGrabber AI
 
-> Automatically detect exciting moments in gameplay videos and generate viral-ready 9:16 vertical Shorts — fully local, open-source, AI-powered.
+Turn a saved stream or a playable live replay into vertical gameplay highlights. Paste a supported stream link in [Clip Studio](https://streamgrabber-ai.onrender.com), select **Full timeline** or **Quick scan**, and choose **Generate clips**. The built-in GTA V sample can be played immediately.
 
-## ✨ Features
+## 20-hour streams
 
-- **Multi-Modal Analysis**: Audio (Whisper transcription + loudness), Visual (CLIP scoring + face detection + motion), NLP (keyword/sentiment scoring)
-- **Smart Highlight Detection**: Combined signal fusion with configurable weights
-- **Vertical 9:16 Output**: Auto-cropped to follow the main subject (face tracking)
-- **Subtitles & Hooks**: Auto-generated from Whisper transcript
-- **Titles & Hashtags**: Context-aware metadata generation
-- **Web UI + CLI**: Browser-based interface and command-line tool
-- **Fully Local**: All AI models run on your machine — no data uploaded
+| Input | What Studio inspects |
+| --- | --- |
+| Saved VOD or local recording | Full timeline reads consecutive four-minute sections with a clip-length overlap, including hour 20. Quick scan checks short samples spread across the selected interval and any available replay peaks or action chapters. |
+| Ongoing livestream with HLS DVR | A snapshot of the completed replay segments available when the job starts, up to the latest 20 hours. The result shows the actual available interval. Audio and video on separate tracks must share a program clock. |
+| Specific match or hour | Open **Choose a time range** and enter hours, minutes and seconds, for example `19:00:00` to `20:00:00`. Recorded sources use time since the recording began. Live sources use time since broadcast start when the provider supplies a clock. Otherwise times refer to the start of the retained replay. |
 
-## 📐 Architecture
+YouTube, Twitch, Kick, Instagram, TikTok, X and Facebook links go through their yt-dlp extractors. The provider controls which formats, replay segments and permissions it makes available. YouTube says DVR can be limited beyond 12 hours and the broadcast may never be archived. To keep all 20 hours of your own broadcast, record locally while streaming. Use the CLI for a multi-GB local file or raise the upload limit on a worker you host. The public worker accepts browser uploads up to 90 MB. [YouTube DVR](https://support.google.com/youtube/answer/9296823) · [YouTube archives](https://support.google.com/youtube/answer/6247592)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     AI VIDEO CLIPPER                        │
-├──────────┬──────────┬──────────┬──────────┬────────────────┤
-│  Stage 1 │  Stage 2 │  Stage 3 │  Stage 4 │    Stage 5     │
-│ Download │  Scene   │  Audio   │  Visual  │   NLP/Text     │
-│ (yt-dlp) │ Detect   │ Analysis │ Analysis │   Scoring      │
-│          │(PyScene) │(Whisper+ │ (CLIP +  │  (Keywords+    │
-│          │          │ librosa) │ OpenCV)  │  Sentiment)    │
-├──────────┴──────────┴──────────┴──────────┴────────────────┤
-│                   Stage 6: Signal Fusion                    │
-│    audio_score × 0.30 + text_score × 0.35 +                │
-│    visual_score × 0.35  →  Peak Detection                  │
-├─────────────────────────────────────────────────────────────┤
-│              Stage 7: Clip Generation (FFmpeg)              │
-│  Trim → Crop 9:16 → Face Track → Subtitles → Hook Text    │
-├─────────────────────────────────────────────────────────────┤
-│           Stage 8: Packaging & Metadata                     │
-│    Titles, Hashtags, Thumbnails, JSON metadata              │
-└─────────────────────────────────────────────────────────────┘
-```
+## Laptop par chalao
 
-## 🚀 Quick Start
-
-### 1. Install Dependencies
+Use Python 3.11 and install both FFmpeg and ffprobe. On Ubuntu/Debian use `sudo apt install ffmpeg`, on macOS use `brew install ffmpeg`. On Windows install an FFmpeg build, add its `bin` directory to PATH and check `ffmpeg -version` and `ffprobe -version`.
 
 ```bash
-# System dependencies
-# Windows: Install FFmpeg from https://ffmpeg.org/download.html
-# Mac: brew install ffmpeg
-# Linux: sudo apt install ffmpeg
-
-# Install yt-dlp
-pip install yt-dlp
-
-# Install Python packages
-pip install -r requirements.txt
-
-# Or install with pip (editable mode)
-pip install -e ".[full,web]"
-```
-
-### 2. CLI Usage
-
-```bash
-# Basic: Generate clips from a local video
-python -m ai_clipper clip gameplay.mp4
-
-# From YouTube URL
-python -m ai_clipper clip "https://youtube.com/watch?v=XXXXX" -o ./my_clips
-
-# Custom settings
-python -m ai_clipper clip video.mp4 \
-    --max-clips 5 \
-    --clip-duration 45 \
-    --whisper-model medium \
-    --weight-audio 0.4 \
-    --weight-text 0.3 \
-    --weight-visual 0.3
-
-# Analysis only (no clip generation)
-python -m ai_clipper analyze video.mp4
-
-# Check system dependencies
-python -m ai_clipper info
-```
-
-### 3. Web UI
-
-```bash
-# Start the web server
-uvicorn ai_clipper.web_ui:app --host 0.0.0.0 --port 8000
-
-# Open http://localhost:8000 in your browser
-```
-
-## ⚙️ Configuration
-
-Copy `.env.example` to `.env` and customize:
-
-```bash
+git clone https://github.com/sneetesh594-alt/streamgrabber-ai.git
+cd streamgrabber-ai
+python -m venv .venv
+# Windows PowerShell uses .venv\Scripts\Activate.ps1
+source .venv/bin/activate
+python -m pip install -r requirements_web.txt
+# Windows PowerShell uses Copy-Item .env.example .env
 cp .env.example .env
+python -m uvicorn stream_downloader.app:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-Key settings:
+Open `http://127.0.0.1:8000`. Pehli run par local CLIP aur Whisper model weights download honge. Full OpenCLIP/PyTorch, Whisper and librosa backends are available through `python -m pip install -r requirements.txt`. For GPU OpenCLIP set `CLIPPER_VISION_BACKEND=openclip`; for PyTorch Whisper set `CLIPPER_SPEECH_BACKEND=whisper`. The default lighter installation uses quantized ONNX CLIP, faster-whisper and PCM RMS.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `CLIPPER_WHISPER_MODEL` | `base` | Whisper model size (tiny/base/small/medium/large) |
-| `CLIPPER_WEIGHT_AUDIO` | `0.30` | Audio energy score weight |
-| `CLIPPER_WEIGHT_TEXT` | `0.35` | Transcript/NLP score weight |
-| `CLIPPER_WEIGHT_VISUAL` | `0.35` | Visual/CLIP score weight |
-| `CLIPPER_MAX_CLIPS` | `10` | Maximum clips to generate |
-| `CLIPPER_CLIP_DURATION_TARGET_SEC` | `30` | Target clip duration |
-| `CLIPPER_OUTPUT_WIDTH` | `1080` | Output width (9:16) |
-| `CLIPPER_OUTPUT_HEIGHT` | `1920` | Output height (9:16) |
-| `CLIPPER_TRACKER_TYPE` | `CSRT` | OpenCV tracker (KCF/CSRT/MOSSE) |
-
-## 🏗️ Project Structure
-
-```
-ai_clipper/
-├── __init__.py          # Package init
-├── __main__.py          # CLI entry point
-├── cli.py               # Click CLI interface
-├── config.py            # Pydantic configuration
-├── pipeline.py          # Main pipeline orchestrator
-├── downloader.py        # yt-dlp video download
-├── scene_detector.py    # PySceneDetect scene detection
-├── audio_analyzer.py    # Whisper + librosa audio analysis
-├── visual_analyzer.py   # CLIP + OpenCV visual scoring
-├── nlp_scorer.py        # NLP keyword/sentiment scoring
-├── scorer.py            # Signal fusion & peak detection
-├── clip_generator.py    # FFmpeg clip generation
-├── face_tracker.py      # OpenCV face tracking
-└── web_ui.py            # FastAPI web interface
-tests/
-└── test_pipeline.py     # Unit tests
+```bash
+python -m ai_clipper clip "recording.mp4" --scan-mode full --max-clips 5 --quality 1080p -o clips_out
+python -m ai_clipper clip "recording.mp4" --start-seconds 68400 --end-seconds 72000 --clip-duration 30 --quality 720p -o hour20
 ```
 
-## 🎯 Scoring Logic
+If a saved VOD job stops, open **Clip library → job → Resume scan** while worker storage persists. The CLI reuses completed sections when rerun with the same source, settings and output folder. Active replay URLs can expire. Submit a fresh live snapshot to inspect what the host still retains.
 
-Each moment gets a weighted score from three signals:
+## How highlights are selected
 
-```
-final_score = (weight_audio × audio_score) +
-              (weight_text  × text_score)  +
-              (weight_visual × visual_score)
-```
+1. yt-dlp reads source metadata and requests bounded, seekable VOD ranges. FFmpeg builds one analysis proxy at a time. Live HLS ranges are determined by real playlist timings.
+2. PySceneDetect identifies cuts. OpenCV measures dark/static frames, scene-wide motion and perceptual fingerprints. CLIP compares sampled frames with gameplay, chase, stunt, menu, idle and non-gameplay descriptions.
+3. Whisper transcribes speech. Audio RMS, gaming phrases and transcript sentiment contribute alongside the visual measurements. The default audio/text/visual weights are 0.30/0.35/0.35.
+4. Only qualifying windows with decoded evidence are retained. Overlapping windows, repeated scenes and visually similar moments compete by score. A source may return zero clips.
+5. FFmpeg fits the full gameplay frame over a blurred portrait background and encodes an H.264/AAC MP4 when source audio exists, at 720×1280 or 1080×1920. Captions use words actually transcribed. Badges, creator tag and transcript hook are optional. Each result includes its source interval and verification method.
 
-- **Audio Score**: RMS energy from librosa — loud moments (explosions, cheers) get high scores
-- **Text Score**: Keyword matching (exciting gaming terms) + sentiment analysis of Whisper transcript
-- **Visual Score**: CLIP similarity to exciting prompts + face detection + optical flow motion
+## Backend-only Gemini reviewers
 
-Peaks in the combined timeline are selected as highlight candidates.
+Both slots use Google's Gemini API. In your worker's secret manager or private `.env`, set `GEMINI_API_KEY` and `SECOND_AI_API_KEY` to freshly rotated keys. Leave the example values blank in Git. Set `GEMINI_REVIEW_ENABLED=true` only to enable the review path. Enable read-only Google Application Default Credentials for API Keys lookup and Cloud Billing project status. The worker confirms each key's owning project, disabled billing and model availability before generation.
 
-## 📋 MVP Roadmap
+The reviewers receive the short decoded candidate video with its audio and available transcript. Rejections veto the moment. A shared SQLite quota reserves calls for both slots together. The default is 12 requests per Pacific day, configurable through `GEMINI_DAILY_REQUEST_LIMIT`. A billing or quota rejection stops further generation for the day. Missing credentials, uncertain billing, unavailable models or exhausted budget return to local analysis. **AI usage** shows daily reservations, tokens and estimated cost. Persist `STREAMGRABBER_STATE_DIR` for durable jobs and accounting.
 
-1. ✅ **MVP1**: Basic download + scene split + naive clip cutting
-2. ✅ **MVP2**: Audio peak scoring (librosa RMS energy)
-3. ✅ **MVP3**: Combined text + audio scoring
-4. ✅ **MVP4**: Visual scoring (CLIP + face detection)
-5. ✅ **MVP5**: FFmpeg clip generation with subtitles and 9:16 crop
-6. ✅ **MVP6**: End-to-end pipeline with metadata
-7. ✅ **MVP7**: Web UI for browser-based usage
+Use only recordings you own or have permission to edit and share. Subtitles, reframing and badges do not change the source rights. The playable GTA V sample is credited to Xusder, CC BY-SA 4.0. [Sample credit and license](ai_clipper/studio/assets/CREDITS.txt)
 
-## 💻 Hardware Requirements
-
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| CPU | 4 cores | 8+ cores |
-| RAM | 8 GB | 16+ GB |
-| GPU | None (CPU works) | NVIDIA GPU with 4+ GB VRAM |
-| Storage | 10 GB free | 50+ GB free |
-
-> **Note**: CLIP and Whisper run much faster with a CUDA GPU. Without GPU, processing a 1-hour video may take 30-60 minutes. With GPU, it can be 5-15 minutes.
-
-## ⚖️ Legal Disclaimer
-
-- **Only process videos you own or have explicit permission to use**
-- Adding subtitles or cropping does NOT clear copyright
-- This tool is for personal and educational use
-- Refer to [YouTube's Terms of Service](https://www.youtube.com/t/terms) for monetization policies
-- Always respect content creators' rights
-
-## 🔧 Troubleshooting
-
-**FFmpeg not found**: Install from https://ffmpeg.org/download.html and add to PATH
-
-**CUDA out of memory**: Use a smaller Whisper model (`--whisper-model tiny`) or disable CLIP (`--no-clip`)
-
-**yt-dlp errors**: Update with `pip install -U yt-dlp`
-
-**Slow processing**: Reduce `CLIPPER_CLIP_SAMPLE_FPS` to analyze fewer frames
-
-## 📚 Key Libraries
-
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video download
-- [OpenAI Whisper](https://github.com/openai/whisper) - Speech-to-text
-- [OpenCLIP](https://github.com/mlfoundations/open_clip) - Visual content scoring
-- [PySceneDetect](https://github.com/Breakthrough/PySceneDetect) - Scene detection
-- [OpenCV](https://opencv.org/) - Face detection + object tracking
-- [librosa](https://librosa.org/) - Audio analysis
-- [FFmpeg](https://ffmpeg.org/) - Video processing
-- [FastAPI](https://fastapi.tiangolo.com/) - Web UI
-- [HuggingFace Transformers](https://huggingface.co/) - NLP models
-
-## License
-
-MIT
+[Deployment guide](CLOUD_DEPLOY_GUIDE.md) · [Test results and reproduction](docs/VERIFICATION.md)

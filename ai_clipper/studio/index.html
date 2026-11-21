@@ -13,9 +13,15 @@
 <form id="clip-form" novalidate>
 <div class="section-body"><div class="label-row"><label for="stream">Video source</label></div>
 <div class="source-tabs" role="group" aria-label="Source type"><button type="button" id="link-tab" aria-pressed="true"><i data-i="link"></i>Stream link</button><button type="button" id="file-tab" aria-pressed="false"><i data-i="upload"></i>Upload file</button></div>
-<div id="url-group"><div class="url-input"><i data-i="link"></i><input id="stream" type="url" autocomplete="url" inputmode="url" placeholder="Paste a stream or VOD URL" aria-label="Stream or VOD URL"><button type="button" id="paste"><i data-i="clipboard"></i>Paste</button></div>
+<div id="url-group"><div class="url-input"><i data-i="link"></i><input id="stream" type="url" autocomplete="url" inputmode="url" placeholder="Paste a livestream or VOD URL" aria-label="Stream or VOD URL"><button type="button" id="paste"><i data-i="clipboard"></i>Paste</button></div>
 <p class="platforms">YouTube <b>·</b> Twitch <b>·</b> Kick <b>·</b> TikTok <b>·</b> Instagram <b>·</b> X <b>·</b> Facebook</p></div>
-<div id="file-group" hidden><label class="drop" for="video-file"><i data-i="upload"></i><span id="file-name">Choose a recording</span><small>MP4, MOV, MKV or WebM · up to 90 MB</small></label><input type="file" id="video-file" accept="video/*,.mkv" class="sr"></div></div>
+<div id="file-group" hidden><label class="drop" for="video-file"><i data-i="upload"></i><span id="file-name">Choose a recording</span><small id="upload-help">MP4, MOV, MKV or WebM · up to 90 MB</small></label><input type="file" id="video-file" accept="video/*,.mkv" class="sr"></div></div>
+<div class="form-sect scan-controls"><div class="scan-heading"><label for="scan-mode">Scan coverage</label><span>20-hour streams supported</span></div>
+<div class="select"><select id="scan-mode"><option value="full">Full timeline</option><option value="quick">Quick scan</option></select></div>
+<p id="scan-hint">Inspect every section of the recording or available live DVR.</p>
+<details><summary><i data-i="sliders"></i>Choose a time range<i data-i="chevron"></i></summary>
+<div class="custom-fields"><label>Start time<input id="range-start" maxlength="9" placeholder="00:00:00" inputmode="text"></label><label>End time<input id="range-end" maxlength="9" placeholder="End of recording" inputmode="text"></label></div>
+<small>HH:MM:SS. A live source can expose a shorter replay window.</small></details></div>
 <div class="form-sect"><div class="form-heading"><i data-i="settings"></i><h3>Export settings</h3></div>
 <div class="fields"><label>Resolution<span class="select"><select id="quality"><option value="1080p">1080p</option><option value="720p">720p</option></select></span></label><label>Clip length<span class="select"><select id="duration"><option value="20">20 sec</option><option value="30" selected>30 sec</option><option value="35">35 sec</option><option value="45">45 sec</option></select></span></label><label>Max clips<span class="stepper"><button type="button" id="fewer" aria-label="Fewer clips">−</button><output id="count">3</output><button type="button" id="more" aria-label="More clips">+</button></span></label></div>
 <div class="overlay-line"><div><label for="overlay">On-video overlays</label><small>Game badge, creator tag and transcript hook</small></div><input type="checkbox" checked id="overlay" class="toggle" role="switch"></div>

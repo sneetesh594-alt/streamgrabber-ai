@@ -1,74 +1,19 @@
-# ☁️ StreamGrabber AI — 24/7 Free Cloud Hosting Guide
+# Hosting Clip Studio
 
-Aapka laptop band hone ke baad bhi website **24 ghante chalane ke liye**, aap ise **100% Free Cloud** par host kar sakte hain.
+## Native Python on Render
 
-Dono best aur aasan tareeqe neeche step-by-step diye gaye hain:
+The existing service is at [streamgrabber-ai.onrender.com](https://streamgrabber-ai.onrender.com). The repository's `render.yaml` also describes a free Python web service. The build checks FFmpeg and ffprobe and installs `requirements_web.txt`. The start command is:
 
----
+```sh
+uvicorn stream_downloader.app:app --host 0.0.0.0 --port "$PORT" --workers 1
+```
 
-## 🌟 Method 1: Hugging Face Spaces (Sabse Best & 100% Free)
-> **Kyun Best Hai?**
-> - 16 GB RAM + 2 vCPU bilkul FREE milta hai (No Credit Card required).
-> - Video cutting aur FFmpeg super fast chalta hai.
-> - Aapko permanent 24/7 public link milta hai: `https://<username>-streamgrabber-ai.hf.space`
+Use a single worker for the local queue. Check `/api/studio/health` for FFmpeg and long-stream support. Gemini is optional. Put rotated credentials and billing-reader credentials in the service's Secrets settings and leave billing disabled on the Gemini project. The CLI and host may use an authorized server cookie file via `YTDLP_COOKIEFILE` if a source legitimately requires sign-in.
 
-### Step-by-Step Steps:
-1. **Account Banayein:**
-   - [huggingface.co/join](https://huggingface.co/join) par jakar free account banayein (1 minute).
-2. **New Space Create Karein:**
-   - [huggingface.co/new-space](https://huggingface.co/new-space) par jayein.
-   - **Space Name:** `streamgrabber-ai`
-   - **License:** `apache-2.0` (ya blank)
-   - **Space SDK:** Choose **Docker** -> **Blank** (Zaroori: Docker select karein).
-   - **Space Hardware:** Free (2 vCPU, 16GB RAM)
-   - **Visibility:** **Public**
-   - Click **Create Space**.
-3. **Files Upload Karein:**
-   - Space page par **Files and versions** tab par click karein -> **Add file** -> **Upload files**.
-   - `stream_downloader` folder ke andar ki sabhi files aur folders upload karein:
-     - `Dockerfile`
-     - `requirements.txt`
-     - `app.py`
-     - `templates/` folder (aur uske andar `index.html`)
-     - `static/` folder (aur uske andar `script.js`, `style.css`)
-   - Click **Commit changes to main**.
-4. **Deploy Ho Gaya!**
-   - Hugging Face automatically 1 minute me container build kar dega.
-   - Aapko permanent live link mil jayega jo laptop band hone par bhi 24 ghante chalega!
+Render free services sleep after 15 minutes without inbound traffic and lose local files on restarts, redeploys and spin-downs. The free service is suited to short jobs and trying the UI. Download clips you want to keep. Hugging Face Spaces also sleeps on free CPU hardware. These tiers do not assure an uninterrupted 20-hour job, GPU access or durable job history. [Render free limits](https://render.com/docs/free) · [Spaces lifecycle](https://huggingface.co/docs/hub/spaces-overview#lifecycle-management)
 
----
+## Sustained long jobs
 
-## 🚀 Method 2: Render.com (GitHub ke zariye 1-Click Deploy)
-> **Kyun Acha Hai?**
-> - GitHub se direct connect hota hai. Jab bhi code update karein, automatically live update ho jata hai.
-> - Free permanent link: `https://streamgrabber-ai.onrender.com`
+An already-on PC with available storage can run the same worker without a hosting subscription. A VPS with persistent disk also works; its provider sets the price. Follow the installation in the README. Put `STREAMGRABBER_STATE_DIR` on a persistent disk, leave the process running, and use a service manager on Linux for automatic restart. For multi-GB recordings already on that computer, the CLI seeks directly in the original file. For a private self-hosted browser deployment, set `STREAMGRABBER_UPLOAD_MB` to an appropriate size for that machine and allow sufficient disk space and proxy upload capacity.
 
-### Step-by-Step Steps:
-1. **GitHub par Repo Banayein:**
-   - [github.com](https://github.com) par free account banakar **New Repository** banayein: `streamgrabber-ai` (Public).
-2. **Code Push Karein:**
-   - Project folder me `deploy_to_github.bat` run karein ya terminal me ye run karein:
-     ```bash
-     git init
-     git add .
-     git commit -m "StreamGrabber AI ready for cloud"
-     git branch -M main
-     git remote add origin https://github.com/<YOUR_USERNAME>/streamgrabber-ai.git
-     git push -u origin main
-     ```
-3. **Render par Deploy Karein:**
-   - [render.com](https://render.com) par free login karein.
-   - Click **New +** -> **Web Service**.
-   - Apna GitHub repository `streamgrabber-ai` select karein.
-   - **Environment:** Select **Docker**.
-   - **Instance Type:** **Free**.
-   - Click **Deploy Web Service**!
-4. Render 2-3 minute me deploy karke aapko permanent link de dega.
-
----
-
-## 🛠️ Files Already Created:
-1. `Dockerfile` — FFmpeg + Node.js + Python 3.11 ready
-2. `render.yaml` — 1-Click Render blueprint
-3. `requirements_web.txt` / `requirements.txt` — Optimized cloud dependencies
-4. `deploy_to_github.bat` — 1-click git helper script
+Full scans inspect the complete available range. Throughput depends on decode speed, model backend, GPU, bandwidth, source seekability and host access. To estimate your hardware's actual processing time, run a full scan of a representative 10-minute interval using the same models and resolution, then inspect `runtime_sec` in `clips_metadata.json`. No full-duration GPU benchmark is published.

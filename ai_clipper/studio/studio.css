@@ -1291,3 +1291,8 @@ dialog::backdrop {
     scroll-behavior: auto !important
   }
 }
+
+.scan-heading {display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.scan-heading span,.scan-controls small,.scan-controls p {color:var(--soft);font-size:.8rem}
+.scan-controls .select {max-width:100%;margin:7px 0}
+.scan-controls small {display:block;margin-top:6px}

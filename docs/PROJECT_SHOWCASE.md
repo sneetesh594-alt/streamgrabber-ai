@@ -22,7 +22,7 @@
 
 ## 🚧 Implementation status
 
-**Work in progress.** The current StreamGrabber web pipeline still selects candidate timestamps from video duration rather than confirmed gameplay evidence. Do not treat its output as AI-verified highlights. Evidence-based ranking work is under review in [PR #1](https://github.com/sneetesh594-alt/streamgrabber-ai/pull/1).
+The published Clip Studio uses decoded visual, audio and speech evidence. It supports full and sampled VOD ranges, retained live DVR, source timestamps and resumable recording scans. [Verification](VERIFICATION.md)
 
 ## 🔐 Security and creator rights
 

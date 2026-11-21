@@ -26,7 +26,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="AI Video Clipper")
+@click.version_option(version="4.1.0", prog_name="AI Video Clipper")
 def cli():
     """🎬 AI Video Clipper - Automatic highlight detection and clip generation."""
     pass
@@ -35,9 +35,12 @@ def cli():
 @cli.command()
 @click.argument("source")
 @click.option("-o", "--output", default="./output", help="Output directory")
-@click.option("--max-clips", default=10, help="Maximum clips to generate")
-@click.option("--clip-duration", default=30.0, help="Target clip duration (seconds)")
-@click.option("--quality", default="720p", help="Download quality (360p/480p/720p/1080p)")
+@click.option("--scan-mode",type=click.Choice(["full","quick"]),default="full",show_default=True)
+@click.option("--start-seconds",type=click.FloatRange(min=0),default=0.)
+@click.option("--end-seconds",type=click.FloatRange(min=0,min_open=True),default=None)
+@click.option("--max-clips",type=click.IntRange(1,10), default=10, help="Maximum clips to generate")
+@click.option("--clip-duration",type=click.FloatRange(20,45), default=30.0, help="Target clip duration (seconds)")
+@click.option("--quality", type=click.Choice(["360p", "480p", "720p", "1080p"]), default="720p", help="1080p or 720p portrait export; 360p and 480p remain 720p aliases.")
 @click.option("--whisper-model", default="base", help="Whisper model (tiny/base/small/medium/large)")
 @click.option("--language", default=None, help="Language code (en/hi/auto)")
 @click.option("--weight-audio", default=0.30, help="Audio score weight (0-1)")
@@ -50,7 +53,7 @@ def cli():
 @click.option("--hook-size", default=52, help="Hook text font size")
 @click.option("--hashtags", default="#Shorts,#Gaming,#Highlights,#GTA6", help="Comma-separated hashtags")
 def clip(
-    source, output, max_clips, clip_duration, quality,
+    source, output, max_clips, clip_duration, quality, scan_mode,start_seconds,end_seconds,
     whisper_model, language, weight_audio, weight_text, weight_visual,
     no_clip, no_face, scene_threshold, subtitle_size, hook_size, hashtags,
 ):
@@ -69,7 +72,7 @@ def clip(
 
     # Build config from CLI options
     config = ClipperConfig(
-        output_dir=Path(output),
+        output_dir=Path(output),scan_mode=scan_mode,range_start=start_seconds, range_end=end_seconds,
         max_clips=max_clips,
         clip_duration_target_sec=clip_duration,
         preferred_quality=quality,
@@ -99,6 +102,8 @@ def clip(
     )
 
     if result.errors:
+        for message in result.errors:
+            console.print(message, style="red", markup=False)
         sys.exit(1)
 
 

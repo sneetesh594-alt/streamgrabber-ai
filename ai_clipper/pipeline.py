@@ -36,7 +36,9 @@ class PipelineResult:
 def run_pipeline(source, output_dir="./output", config=None, progress=None):
     from .config import config as defaults
     from .downloader import get_video_info
-    from .sources import metadata, scan_ranges, fetch_section, make_proxy
+    from .sources import metadata, inspection_ranges, fetch_section, make_proxy
+    from . import checkpoints
+    from .live_dvr import open_dvr
     from .audio_analyzer import extract_audio, transcribe_audio, analyze_audio_energy
     from .visual_analyzer import analyze_visual
     from .scene_detector import detect_scenes
@@ -50,7 +52,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
     result = PipelineResult(output_dir=output_dir)
     report = progress or (lambda n, msg: console.print(f"[cyan]{n}%[/] {msg}"))
     started = time.monotonic()
-    warnings, observations, covered, all_speech = [], [], [], []
+    dvr, saved_scans = None, None
+    retained_sources = {}
+    warnings, covered, all_speech = [], [], []
     remote = str(source).startswith(("https://", "http://"))
     try:
         with tempfile.TemporaryDirectory(prefix="studio-") as tmp:
@@ -58,43 +62,95 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
             report(4, "Reading source metadata")
             if remote:
                 info = metadata(source)
-                title, duration = info.get("title", "Gameplay"), float(info["duration"])
-                coverage = scan_ranges(info, config.scan_budget)
+                title = info.get("title", "Gameplay")
+                if info.get("is_live") or info.get("live_status") == "is_live":
+                    report(8,"Reading retained live DVR")
+                    dvr = open_dvr(info, config.output_width)
+                    duration = dvr.duration
+                    info = {"duration": duration}
+                else:
+                    duration = float(info["duration"])
+                identity = [source,info.get("id"),duration]
             else:
                 source = Path(source).resolve()
-                info = get_video_info(source)
-                title, duration = info.title, info.duration_sec
-                # Process local recordings completely, with overlap at batch edges.
-                coverage = scan_ranges({"duration": duration}, max(2, int(duration/48)+3))
+                video = get_video_info(source)
+                title, duration = video.title, video.duration_sec
+                info = {"duration":duration}
+                identity = [str(source),source.stat().st_mtime_ns,source.stat().st_size,duration]
             if duration > config.max_video_length_minutes * 60:
                 raise ValueError("Recording exceeds the configured maximum duration.")
-            result.metadata.update(title=title, duration_sec=duration, source="platform VOD" if remote else "uploaded recording")
+            start, end = config.range_start, config.range_end
+            if dvr and dvr.offset:
+                start = max(0., (start or 0)-dvr.offset)
+                if end is not None:
+                    end -= dvr.offset
+            coverage = inspection_ranges(info, config.scan_mode, start, end,
+                                         config.clip_duration_target_sec, config.scan_budget)
+            timeline_offset = dvr.offset if dvr else 0.
+            result.metadata.update(title=title,duration_sec=duration,source="live DVR" if dvr else
+                                   ("platform VOD" if remote else "uploaded recording"),
+                                   scan_mode=config.scan_mode,timeline_origin=dvr.origin if dvr else "recording start",
+                                   available_range=[timeline_offset,timeline_offset+duration])
+            cloud_active = os.getenv("GEMINI_REVIEW_ENABLED","").lower()=="true"
+            if not dvr:
+                saved_scans = checkpoints.location(output_dir,[identity,config.model_dump(mode="json"),cloud_active,"scan-v2"])
+            else:
+                warnings.append("Inspected the completed segments the provider exposed when this job started.")
             report(9, f"Inspecting {len(coverage)} source sections")
+            selected = []
+            def retain(moment):
+                if any(old.score >= moment.score and duplicate(moment,[old]) for old in selected):
+                    return
+                selected[:] = sorted([old for old in selected if not duplicate(moment,[old])] + [moment],
+                                     key=lambda m: -m.score)[:config.max_clips]
             for index, (start, end) in enumerate(coverage):
-                progress_n = 10 + round(60*index/len(coverage))
+                progress_n = 10 + round(65*index/len(coverage))
+                checkpoint = saved_scans/f"{index:05}.json" if saved_scans else None
+                if checkpoint and checkpoint.is_file():
+                    previous, transcript, bounds, messages = checkpoints.load(checkpoint)
+                    for moment in previous:
+                        retain(moment)
+                    covered.append(bounds)
+                    all_speech.extend(transcript)
+                    warnings.extend(messages)
+                    report(progress_n, f"Resumed section {index+1} of {len(coverage)}")
+                    continue
                 report(progress_n, f"Reading section {index+1} of {len(coverage)}")
-                proxy = temp / f"scan-{index}.mp4"
+                # Only the current proxy and high-resolution sections backing retained live clips survive a batch.
+                proxy = temp/"scan.mp4"
+                section = temp/f"source-{index}.mp4"
                 if remote:
-                    section = temp / f"source-{index}.mp4"
                     try:
-                        fetch_section(source, start, end, section, 360)
+                        if dvr:
+                            dvr.fetch(start,end,section,config.output_width)
+                        else:
+                            fetch_section(source,start,end,section,360)
                     except ValueError as exc:
-                        if "refused access" in str(exc) or len(coverage) == 1:
+                        if "refused access" in str(exc) or len(coverage)==1:
                             raise
+                        section.unlink(missing_ok=True)
                         warnings.append(f"Section {index+1} was unavailable.")
                         continue
-                    make_proxy(section, proxy, 0, end-start)
-                    section.unlink()
+                    make_proxy(section,proxy,0,end-start)
+                    if not dvr:
+                        section.unlink()
                 else:
-                    make_proxy(source, proxy, start, end-start)
+                    make_proxy(source,proxy,start,end-start)
                 actual = min(get_video_info(proxy).duration_sec, end-start)
-                covered.append([start, start+actual])
+                bounds = [timeline_offset+start, timeline_offset+start+actual]
+                covered.append(bounds)
+                batch_warnings = []
                 report(progress_n+1, f"Measuring motion and gameplay in section {index+1}")
                 visual = analyze_visual(proxy, sample_fps=config.clip_sample_fps, use_clip=config.use_clip,
                                         use_face_detection=False)
-                if not any(f.gameplay is not None for f in visual.frame_scores) and config.use_clip:
-                    warnings.append("Local gameplay model unavailable. Cloud verification is required for these frames.")
+                if (config.use_clip and any(not f.black and f.motion_score > .13 for f in visual.frame_scores)
+                        and not any(f.gameplay is not None for f in visual.frame_scores)):
+                    batch_warnings.append("Local gameplay model unavailable. Cloud verification is required for these frames.")
                 if sum(f.motion_score > .13 and not f.black for f in visual.frame_scores) < 4:
+                    if checkpoint:
+                        checkpoints.save(checkpoint,[],[],bounds,batch_warnings)
+                    section.unlink(missing_ok=True)
+                    warnings.extend(batch_warnings)
                     continue
                 scenes = detect_scenes(proxy, config.scene_threshold, config.min_scene_length_sec)
                 speech, energy = [], None
@@ -106,36 +162,50 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     try:
                         speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
                     except (OSError, RuntimeError, ImportError, ValueError):
-                        warnings.append("Speech model unavailable; captions could not be generated for this section.")
-                    all_speech.extend(replace(seg,start=seg.start+start,end=seg.end+start) for seg in speech)
+                        batch_warnings.append("Speech model unavailable; captions could not be generated for this section.")
                     audio.unlink(missing_ok=True)
-                observations.extend(candidates(proxy, start, actual, visual, energy, speech, scenes, config))
+                transcript = [replace(seg,start=seg.start+start+timeline_offset,end=seg.end+start+timeline_offset)
+                              for seg in speech]
+                all_speech.extend(transcript)
+                rows = candidates(proxy,start,actual,visual,energy,speech,scenes,config)
+                verified = []
+                for moment in rows:
+                    if moment.score < config.min_highlight_score:
+                        continue
+                    if len(verified)>=config.max_clips or duplicate(moment,verified):
+                        continue
+                    verdict = None
+                    if cloud_active and (len(selected)<config.max_clips or moment.score>selected[-1].score):
+                        preview = temp/"review.mp4"
+                        make_proxy(proxy,preview,moment.start-start,moment.end-moment.start,224)
+                        verdict = review(preview," ".join(seg.text for seg in moment.speech))
+                    if verify(moment,verdict,config):
+                        verified.append(moment)
+                        retain(moment)
+                if checkpoint:
+                    checkpoints.save(checkpoint,verified,transcript,bounds,batch_warnings)
+                if dvr:
+                    retained_sources[start] = section
+                    keep = {m.scan_start for m in selected}
+                    for old_start in list(retained_sources):
+                        if old_start not in keep:
+                            retained_sources.pop(old_start).unlink(missing_ok=True)
+                warnings.extend(batch_warnings)
             if not covered:
                 raise ValueError("The video host did not return any inspectable sections.")
             result.metadata["scanned_ranges"] = covered
             result.metadata["warnings"] = list(dict.fromkeys(warnings))
-            report(72, "Verifying and deduplicating candidate moments")
-            selected = []
-            for moment in sorted(observations, key=lambda m: -m.score):
-                if duplicate(moment, selected) or moment.score < config.min_highlight_score:
-                    continue
-                verdict = None
-                if os.getenv("GEMINI_REVIEW_ENABLED", "").lower() == "true":
-                    preview = temp/"review.mp4"
-                    make_proxy(moment.proxy, preview, moment.start-moment.scan_start, moment.end-moment.start, 224)
-                    verdict = review(preview, " ".join(s.text for s in moment.speech))
-                if verify(moment, verdict, config):
-                    selected.append(moment)
-                    if len(selected) >= config.max_clips:
-                        break
+            report(76,"Rendering verified highlights")
             for folder in ("clips", "subtitles", "thumbnails"):
                 (output_dir/folder).mkdir(exist_ok=True)
             for idx, moment in enumerate(selected, 1):
                 report(78 + int(20*(idx-1)/len(selected)), f"Rendering clip {idx} of {len(selected)}")
                 original, cut_start = source, moment.start
-                if remote:
+                if dvr:
+                    original,cut_start = retained_sources[moment.scan_start], moment.start-moment.scan_start
+                elif remote:
                     original = temp/f"export-{idx}.mp4"
-                    fetch_section(source, moment.start, moment.end, original, config.output_height)
+                    fetch_section(source, moment.start, moment.end, original, config.output_width)
                     cut_start = 0
                 basename = f"clip_{idx:02d}"
                 subs = output_dir/"subtitles"/(basename+".srt")
@@ -156,7 +226,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     config.hook_font_size, config.hook_font_color, config.enable_overlay, config.creator_tag,
                     config.overlay_badge, config.frame_style)
                 _generate_thumbnail(original, cut_start+moment.peak-moment.start, thumb)
-                clip = GeneratedClip(idx, path, thumb, moment.start, moment.end, moment.end-moment.start,
+                clip = GeneratedClip(idx, path, thumb, timeline_offset+moment.start, timeline_offset+moment.end, moment.end-moment.start,
                     moment.score, _generate_title(title, moment.hook, idx), moment.hook,
                     _generate_hashtags(moment.hook, config.default_hashtags), subs)
                 clip.evidence = moment.evidence
@@ -191,9 +261,12 @@ def _save_transcript(segments: list, filepath: Path):
 def _save_metadata(result: PipelineResult, output_dir: Path):
     """Clips metadata aur summary save karo."""
     metadata = {
-        "pipeline_version": "4.0",
+        "pipeline_version": "4.1",
         "scanned_ranges": result.metadata.get("scanned_ranges", []),
         "warnings": result.metadata.get("warnings", []),
+        "available_range": result.metadata.get("available_range"),
+        "timeline_origin": result.metadata.get("timeline_origin"),
+        "scan_mode": result.metadata.get("scan_mode"),
         "source": result.metadata.get("source", ""),
         "title": result.metadata.get("title", ""),
         "runtime_sec": result.runtime_sec,

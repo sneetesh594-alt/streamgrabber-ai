@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv(override=False)
 from pydantic import Field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 
 class ClipperConfig(BaseSettings):
@@ -40,7 +40,7 @@ class ClipperConfig(BaseSettings):
     # --- CLIP (Visual Analysis) ---
     clip_model_name: str = Field(default="ViT-B-32", description="CLIP model architecture")
     clip_pretrained: str = Field(default="laion2b_s34b_b79k", description="CLIP pretrained weights")
-    clip_sample_fps: float = Field(default=1.0, description="Frames per second to sample for CLIP")
+    clip_sample_fps: float = Field(default=1.0, gt=0, le=8, description="Frames per second to sample for CLIP")
     clip_prompts: list[str] = Field(
         default=[
             "an exciting action scene",
@@ -73,7 +73,7 @@ class ClipperConfig(BaseSettings):
     # --- Clip Output ---
     clip_duration_min_sec: float = Field(default=20.0, description="Minimum clip duration in seconds")
     clip_duration_max_sec: float = Field(default=45.0, description="Maximum clip duration in seconds")
-    clip_duration_target_sec: float = Field(default=30.0, description="Target clip duration in seconds")
+    clip_duration_target_sec: float = Field(default=30.0, ge=20, le=45, description="Target clip duration in seconds")
     output_width: int = Field(default=1080, description="Output video width (9:16)")
     output_height: int = Field(default=1920, description="Output video height (9:16)")
     output_fps: int = Field(default=30, description="Output video FPS")
@@ -101,6 +101,9 @@ class ClipperConfig(BaseSettings):
     frame_style: str = "blur_bg"
     use_clip: bool = True
     use_face: bool = True
+    scan_mode: Literal["full", "quick"] = "full"
+    range_start: float = Field(default=0, ge=0, allow_inf_nan=False)
+    range_end: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     scan_budget: int = Field(default=14, ge=1, le=120)
     min_highlight_score: float = Field(default=.33, ge=0, le=1)
     model_config = SettingsConfigDict(env_prefix="CLIPPER_", env_file=".env", extra="ignore")

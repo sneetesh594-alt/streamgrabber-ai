@@ -28,7 +28,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     if (Object.hasOwn(assets,path) && ['GET','HEAD'].includes(request.method)) return embedded(assets[path],request);
-    if (!/^\/api\/studio\/(?:health|usage|upload|jobs(?:\/[a-f0-9]{32}(?:\/(?:bundle|media\/clip_\d{2}(?:\.mp4|_thumb\.jpg)|share\/\d{1,2}))?)?)$/.test(path))
+    if (!/^\/api\/studio\/(?:health|usage|upload|jobs(?:\/[a-f0-9]{32}(?:\/(?:resume|bundle|media\/clip_\d{2}(?:\.mp4|_thumb\.jpg)|share\/\d{1,2}))?)?)$/.test(path))
       return new Response('Not found',{status:404});
     if (!['GET','POST','HEAD'].includes(request.method)) return new Response(null,{status:405});
     const headers = new Headers();
