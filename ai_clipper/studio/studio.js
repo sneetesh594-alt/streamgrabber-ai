@@ -66,7 +66,11 @@ async function api(path, options = {}) {
   try { res = await fetch(path, {cache:'no-store',...options}); }
   catch { throw new Error('The processing server is unreachable. Check your connection and retry.'); }
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof json.detail === 'string' ? json.detail : 'The request could not be completed (' + res.status + ').');
+  if (!res.ok) {
+    const error = new Error(typeof json.detail === 'string' ? json.detail : 'The request could not be completed ('+res.status+').');
+    error.status = res.status;
+    throw error;
+  }
   return json;
 }
 let mode = 'link';
@@ -190,10 +194,11 @@ async function watch(id, label) {
         return;
       }
     } catch(e) {
-      if (++misses >= 3) {el('job-status').textContent = e.message+' Reopen the job from Clip library to retry.';return;}
+      if(e.status===404){el('job-status').textContent='This worker no longer has the job. Submit your recording again.';return;}
+      if (++misses >= 12) {el('job-status').textContent = e.message+' Reopen the job from Clip library to retry.';return;}
       el('job-status').textContent = 'Reconnecting to the processing server…';
     }
-    await new Promise(done => setTimeout(done,2500));
+    await new Promise(done => setTimeout(done,Math.min(10000,2500*(1+misses))));
   }
 }
 el('clip-form').onsubmit = async event => {

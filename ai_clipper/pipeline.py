@@ -38,6 +38,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
     from .downloader import get_video_info
     from .sources import metadata, inspection_ranges, fetch_section, make_proxy
     from . import checkpoints
+    from .runtime_memory import low_memory, release_models
     from .live_dvr import open_dvr
     from .audio_analyzer import extract_audio, transcribe_audio, analyze_audio_energy
     from .visual_analyzer import analyze_visual
@@ -47,6 +48,9 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
     from .clip_generator import (GeneratedClip, _generate_single_clip, _generate_srt,
                                  _generate_thumbnail, _generate_title, _generate_hashtags)
     config = config or defaults
+    if low_memory():
+        import cv2
+        cv2.setNumThreads(1)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     result = PipelineResult(output_dir=output_dir)
@@ -152,6 +156,8 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                     section.unlink(missing_ok=True)
                     warnings.extend(batch_warnings)
                     continue
+                release_models()
+                report(progress_n+1, f"Checking scene cuts in section {index+1}")
                 scenes = detect_scenes(proxy, config.scene_threshold, config.min_scene_length_sec)
                 speech, energy = [], None
                 audio_stream = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
@@ -159,10 +165,13 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                 if audio_stream.stdout.strip():
                     audio = extract_audio(proxy, temp / f"audio-{index}.wav")
                     energy = analyze_audio_energy(audio, config.audio_hop_length, config.audio_frame_length)
+                    report(progress_n+1, f"Transcribing audio in section {index+1}")
                     try:
                         speech = transcribe_audio(audio, config.whisper_model, config.whisper_language)
                     except (OSError, RuntimeError, ImportError, ValueError):
                         batch_warnings.append("Speech model unavailable; captions could not be generated for this section.")
+                    finally:
+                        release_models()
                     audio.unlink(missing_ok=True)
                 transcript = [replace(seg,start=seg.start+start+timeline_offset,end=seg.end+start+timeline_offset)
                               for seg in speech]
@@ -195,6 +204,7 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
                 raise ValueError("The video host did not return any inspectable sections.")
             result.metadata["scanned_ranges"] = covered
             result.metadata["warnings"] = list(dict.fromkeys(warnings))
+            release_models()
             report(76,"Rendering verified highlights")
             for folder in ("clips", "subtitles", "thumbnails"):
                 (output_dir/folder).mkdir(exist_ok=True)
@@ -240,6 +250,8 @@ def run_pipeline(source, output_dir="./output", config=None, progress=None):
         result.errors.append(str(exc) if isinstance(exc, ValueError) else "Input or processing dependency is unavailable.")
     except Exception as exc:
         result.errors.append(f"Processing failed ({type(exc).__name__}). Check installed models and FFmpeg.")
+    finally:
+        release_models()
     result.runtime_sec = time.monotonic()-started
     return result
 

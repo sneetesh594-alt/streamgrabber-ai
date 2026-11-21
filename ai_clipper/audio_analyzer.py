@@ -138,7 +138,7 @@ def analyze_audio_energy(
             pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").astype(np.float32)/32768
         padded = np.pad(pcm, frame_length//2)
         frames = np.lib.stride_tricks.sliding_window_view(padded, frame_length)[::hop_length]
-        rms = np.sqrt(np.mean(frames*frames, axis=1))
+        rms = np.sqrt(np.einsum("ij,ij->i", frames, frames) / frame_length)
     times = np.arange(len(rms)) * hop_length/sr
     low, high = np.percentile(rms, [10, 95])
     norm = np.clip((rms-low)/max(.018, high-low), 0, 1)

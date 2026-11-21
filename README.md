@@ -28,7 +28,7 @@ cp .env.example .env
 python -m uvicorn stream_downloader.app:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-Open `http://127.0.0.1:8000`. Pehli run par local CLIP aur Whisper model weights download honge. Full OpenCLIP/PyTorch, Whisper and librosa backends are available through `python -m pip install -r requirements.txt`. For GPU OpenCLIP set `CLIPPER_VISION_BACKEND=openclip`; for PyTorch Whisper set `CLIPPER_SPEECH_BACKEND=whisper`. The default lighter installation uses quantized ONNX CLIP, faster-whisper and PCM RMS.
+Open `http://127.0.0.1:8000`. Pehli run par local CLIP aur Whisper model weights download honge. Full OpenCLIP/PyTorch, Whisper and librosa backends are available through `python -m pip install -r requirements.txt`. For GPU OpenCLIP set `CLIPPER_VISION_BACKEND=openclip`; for PyTorch Whisper set `CLIPPER_SPEECH_BACKEND=whisper`. The default lighter installation uses quantized ONNX CLIP, faster-whisper and PCM RMS. On small workers the app releases inference models before FFmpeg renders the portrait clip. A higher-memory GPU worker can set `CLIPPER_LOW_MEMORY=false` to keep models warm across stages.
 
 ```bash
 python -m ai_clipper clip "recording.mp4" --scan-mode full --max-clips 5 --quality 1080p -o clips_out

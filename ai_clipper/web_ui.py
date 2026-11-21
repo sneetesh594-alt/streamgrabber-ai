@@ -51,6 +51,12 @@ def job_path(job_id):
     return STATE/"jobs"/job_id
 
 
+def source_time(seconds):
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return (f"{hours}:" if hours else "") + f"{minutes:02}:{seconds:02}"
+
+
 def update(folder, **changes):
     file = folder/"job.json"
     with MUTEX:
@@ -78,7 +84,9 @@ def home():
 
 @app.get("/api/studio/health")
 def health():
+    from .runtime_memory import low_memory
     return {"service": "streamgrabber-ai", "studio_version": 4, "evidence_required": True,
+            "low_memory": low_memory(),
             "long_streams": True, "live_dvr_hours": 20, "scan_modes": ["full","quick"],
             "ffmpeg": bool(shutil.which("ffmpeg")), "max_upload_mb": MAX_UPLOAD//1024//1024}
 
@@ -116,7 +124,7 @@ def process(folder, source, opts, source_name):
                                   media_url=base+c.filepath.name, download_url=base+c.filepath.name+"?download=1",
                                   thumb_url=base+c.thumbnail_path.name, hook=c.hook_text,
                                   captions=bool(c.subtitle_path and c.subtitle_path.stat().st_size),
-                                  time_range=f"{int(c.start_time)//60:02}:{int(c.start_time)%60:02} – {int(c.end_time)//60:02}:{int(c.end_time)%60:02}"))
+                                  time_range=f"{source_time(c.start_time)} – {source_time(c.end_time)}"))
             update(folder, status="completed", percent=100, progress=100,
                    stage="Clips ready" if clips else "No qualifying gameplay found",
                    num_clips=len(clips), clips=clips, resumable=False,

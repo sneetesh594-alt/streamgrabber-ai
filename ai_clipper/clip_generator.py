@@ -262,11 +262,16 @@ def _generate_single_clip(video_path, output_path, start_time, end_time, output_
         graph += ";[base]" + ",".join(layers) + "[v]"
         target = Path(output_path).resolve()
         temp = target.with_suffix(".part.mp4")
+        from .runtime_memory import low_memory
+        bounded = low_memory()
+        encoder = ["-threads", "1" if bounded else "2", "-preset", "veryfast"]
+        if bounded:
+            encoder += ["-tune", "zerolatency", "-x264-params", "ref=1:rc-lookahead=0"]
         try:
-            cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", str(start_time),
+            cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "1" if bounded else "2", "-ss", str(start_time),
                    "-i", str(Path(video_path).resolve()), "-t", str(end_time-start_time),
-                   "-filter_complex_threads", "2", "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
-                   "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "22",
+                   "-filter_complex_threads", "1" if bounded else "2", "-filter_complex", graph, "-map", "[v]", "-map", "0:a:0?",
+                   "-c:v", "libx264", *encoder, "-crf", "22",
                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(temp)]
             subprocess.run(cmd, cwd=work, check=True, capture_output=True, timeout=360)
             temp.replace(target)

@@ -15,12 +15,15 @@ The 39-test run passed. Tests include real FFmpeg scene cuts, portrait sizes, ov
 | --- | --- |
 | Xusder's GTA V Urban Mayhem recording, 117.63 s | Local CLIP and Whisper pipeline produced two 30 s clips. The built-in sample starts at 41.816 s. No words were transcribed in that window. |
 | Controlled 20-hour MP4 | The test container had an extended still lead-in and real, licensed GTA V footage in the final 45 seconds. ffprobe reported 72,000.064 s. A requested scan of 71,955–72,000 s produced one 25.000 s 720×1280 H.264/AAC MP4, source 71,963.5–71,988.5 s, local CLIP score 0.5586. This measures seeking, analysis and export at hour 20. |
+| Complete scan of a second 20-hour fixture | The fixture had real black frames every 15 s and quiet audio before 45 s of licensed GTA V at the end. The worker processed all 335 overlapping sections, with zero gaps across 0–72,000.128 s, rejected the long static section and exported one 25 s clip at 19:59:31.5–19:59:56.5. Full run took 195.8 s on the test CPU. The mostly still, low-resolution fixture measures timeline coverage, not ordinary gameplay throughput. |
 | Public 22h46m walkthrough | yt-dlp returned a duration of 81,960 s and a YouTube HLS HTTP 403 warning. Only metadata was verified. The local and controlled-HLS tests exercise the extraction path independently. |
 
-Source and rights for the gameplay test are in the [sample credits](../ai_clipper/studio/assets/CREDITS.txt). The 20-hour fixture is a seek test. A complete 20-hour natural broadcast has not been benchmarked.
+Source and rights for the gameplay test are in the [sample credits](../ai_clipper/studio/assets/CREDITS.txt). For the 30 s portrait trial at 720p, releasing local models between stages and limiting FFmpeg encoder buffers reduced the largest sampled process-tree private working set from 563.9 MiB to 327.3 MiB. A complete 20-hour natural broadcast has not been benchmarked.
 
 ```sh
 python -m yt_dlp --no-playlist --js-runtimes node --skip-download --print "%(duration)s %(title)s" "https://www.youtube.com/watch?v=vZJSlBiA5kw"
+python scripts/make_20h_test_recording.py "your-gameplay.mp4" fixture-20h.mp4 --start 33
+python -m ai_clipper clip fixture-20h.mp4 --scan-mode full --clip-duration 25 --max-clips 1 --quality 720p -o full20h
 python -m ai_clipper clip "your-20-hour-recording.mp4" --start-seconds 71955 --end-seconds 72000 --clip-duration 25 --max-clips 1 --quality 720p -o hour20
 ffprobe -v error -show_entries stream=codec_name,width,height:format=duration -of compact hour20/clips/clip_01.mp4
 ```

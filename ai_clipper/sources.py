@@ -155,7 +155,7 @@ def fetch_section(url, start, end, dest, height):
 
 
 def make_proxy(source, dest, start, duration, height=288):
-    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", f"{start:.3f}",
+    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "1", "-ss", f"{start:.3f}",
            "-i", str(source), "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
            "-vf", f"scale=-2:'min({height},ih)',fps=8", "-c:v", "libx264",
            "-preset", "ultrafast", "-crf", "27", "-threads", "2",
